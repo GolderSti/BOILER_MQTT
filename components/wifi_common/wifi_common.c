@@ -252,8 +252,6 @@ esp_err_t WFc_ScanNeighborAPs(wifi_neighbor_scan_result_t *scan_result, bool asy
             .channel = 0,
             .show_hidden = true,
             .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-            .scan_time.active.min = 100,
-            .scan_time.active.max = 300
         };
         
         esp_err_t err = esp_wifi_scan_start(&scan_config, false);
@@ -273,8 +271,6 @@ esp_err_t WFc_ScanNeighborAPs(wifi_neighbor_scan_result_t *scan_result, bool asy
             .channel = 0,
             .show_hidden = true,
             .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-            .scan_time.active.min = 100,
-            .scan_time.active.max = 300
         };
         
         esp_err_t err = esp_wifi_scan_start(&scan_config, true);
@@ -646,12 +642,16 @@ void WFc_Init() {
         .sta = {
             .ssid = EXAMPLE_WIFI_SSID,
             .password = EXAMPLE_WIFI_PASSWORD,
-            .btm_enabled = 1,
-                .scan_method = WIFI_ALL_CHANNEL_SCAN,
-                .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
-                .rm_enabled = 1,
-                .mbo_enabled = 1,
-                .ft_enabled = 1,
+            .scan_method = WIFI_ALL_CHANNEL_SCAN,
+            .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
+                // .rm_enabled = 1,
+                // .mbo_enabled = 1,
+                // .ft_enabled = 1,
+            // .btm_enabled = 1,
+            .rm_enabled  = 0,
+            .btm_enabled = 0,
+            .mbo_enabled = 0,
+            .ft_enabled  = 0,
             }
         };
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));

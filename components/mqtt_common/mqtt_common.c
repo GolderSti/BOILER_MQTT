@@ -108,9 +108,10 @@ void mqtt_common_send_message(const char *pcTopic, uint32_t uMsg)
  * 
  *  @param[in] pTopic    : Topic
  *  @param[in] pMessage  : Message
+ *  @param[in] bool      : TAG
  *
  */
-void mqtt_Message_Publish(const char * pTopic, const char* pMessage)
+void mqtt_Message_Publish_TAG(const char * pTopic, const char* pMessage, bool bTag)
 {
     MQTT_Queue_Data_t xDataToSend;
     BaseType_t xStatus;
@@ -126,11 +127,20 @@ void mqtt_Message_Publish(const char * pTopic, const char* pMessage)
         ESP_LOGW(TAG,"\tTrying to publish to NULL message.");
         return;
     }
+    const char *pTAG;
+    if (bTag)
+    {
+        pTAG=MQTT_TAG;
+    }else
+    {
+        pTAG="";
+    }
     
     
-    xDataToSend.pTopic=malloc(strlen(pTopic) + strlen(MQTT_TAG) + 1);
+    
+    xDataToSend.pTopic=malloc(strlen(pTopic) + strlen(pTAG) + 1);
     if (xDataToSend.pTopic != NULL) {
-        strcpy(xDataToSend.pTopic,MQTT_TAG);
+        strcpy(xDataToSend.pTopic,pTAG);
         strcat(xDataToSend.pTopic,pTopic);
         // xDataToSend.pTopic=pTopic;
         xDataToSend.pMessage=malloc(strlen(pMessage)+1);
@@ -161,6 +171,22 @@ void mqtt_Message_Publish(const char * pTopic, const char* pMessage)
         ESP_LOGE(TAG,"\tNot enouth memory for Topic String");
     }
     
+}
+
+/*!
+ *  @brief Send pMessage and pointer to "MQTT_TAG + pTopic" Via queue to Main MQTT task to publish 
+ *
+ *  @details 
+ *  Send pMessage and pointer to "MQTT_TAG + pTopic" Via queue to Main MQTT task to publish. 
+ *  Free it in case of error, otherwise it is freed in MQTT task
+ * 
+ *  @param[in] pTopic    : Topic
+ *  @param[in] pMessage  : Message
+ *
+ */
+void mqtt_Message_Publish(const char * pTopic, const char* pMessage)
+{
+    mqtt_Message_Publish_TAG(pTopic, pMessage, pdTRUE);
 }
 
 /*!

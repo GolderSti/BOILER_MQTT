@@ -53,7 +53,7 @@ static esp_err_t fetch_server_version(char* version, size_t len) {
     
     esp_http_client_config_t http_config = {
         .url = url,
-        .timeout_ms = 5000,
+        .timeout_ms = 10000,
         .buffer_size = 512,
     };
     

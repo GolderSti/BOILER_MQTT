@@ -11,16 +11,165 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
+#include <stdio.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_chip_info.h"
 #include "nvs_flash.h"
 
 #include "wifi_common.h"
+#include "version.h"
+#include "esp_ota_ops.h"
+#include "ota.h"
 #include "mqtt_common.h"
 #include "hlk_ld2410c.h"
 
-const char *TAG = "wifi roaming app";
+const char *TAG = "MAIN";
+
+// Конфигурация Wi-Fi
+#define WIFI_SSID "Sti-WiFi"
+#define WIFI_PASS "6k8wSbcN"
+#define WIFI_WAIT_BEFOR_OTA 30000 //wait for wifi befor OTA to reise an error
+
+// Конфигурация OTA
+static const ota_config_t ota_config = {
+    .server_url = "http://esp-update.lan:8080",
+    .firmware_path = "/api/firmware/download?app=",
+    .version_path = "/api/firmware/version?app=",
+    .sha256_path = "/api/firmware/sha256?app=",
+    .check_interval_ms = 300000, // 5 минут
+    .check_on_boot = true,
+    .max_retries = 3,
+};
+
+/* =========================================================
+ * Общая информация о системе
+ * ========================================================= */
+
+// Функция для вывода информации о системе
+static void print_system_info(void) {
+    ESP_LOGI(TAG, "====================================");
+    ESP_LOGI(TAG, "OTA Example Application");
+    ESP_LOGI(TAG, "Версия прошивки: %s", version_get());
+    ESP_LOGI(TAG, "IDF Version: %s", esp_get_idf_version());
+    
+    // Информация о flash
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    ESP_LOGI(TAG, "Чип: %s Rev %d", 
+             CONFIG_IDF_TARGET, chip_info.revision);
+    ESP_LOGI(TAG, "Ядер CPU: %d", chip_info.cores);
+    ESP_LOGI(TAG, "Wi-Fi: %s", 
+             (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "Yes" : "No");
+    
+    // Информация о памяти
+    ESP_LOGI(TAG, "Свободная память: %" PRIu32 " bytes", 
+             esp_get_free_heap_size());
+    ESP_LOGI(TAG, "Минимальная свободная память: %" PRIu32 " bytes", 
+             esp_get_minimum_free_heap_size());
+    
+    // Информация о текущей прошивке
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (running) {
+        ESP_LOGI(TAG, "Текущий раздел: %s (0x%x)", 
+                 running->label, running->address);
+    }
+    
+    ESP_LOGI(TAG, "====================================");
+}
+
+/* =========================================================
+ * ОТА дополнительные функции
+ * ========================================================= */
+
+ void check_all_versions(void) {
+    // 1. Из заголовка прошивки (то, что видит bootloader)
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    
+    // 2. Из нашего компонента
+    const char* our_version = version_get();
+    
+    // 3. Из раздела (если нужно)
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_app_desc_t partition_desc;
+    esp_ota_get_partition_description(running, &partition_desc);
+    
+    ESP_LOGV(TAG, "=== Version Check ===");
+    ESP_LOGV(TAG, "1. App header version: %s", app_desc->version);
+    ESP_LOGV(TAG, "2. Component version: %s", our_version);
+    ESP_LOGV(TAG, "3. Partition version: %s", partition_desc.version);
+    ESP_LOGV(TAG, "4. Project name: %s", app_desc->project_name);
+    ESP_LOGV(TAG, "5. Compile time: %s %s", app_desc->date, app_desc->time);
+    
+    // Проверяем совпадение
+    bool all_match = (strcmp(app_desc->version, our_version) == 0) &&
+                     (strcmp(app_desc->version, partition_desc.version) == 0);
+    
+    if (all_match) {
+        ESP_LOGV(TAG, "✓ All versions match!");
+    } else {
+        ESP_LOGW(TAG, "✗ Version mismatch detected!");
+    }
+}
+
+//esp idf rollback functions
+static void check_and_validate_ota(bool bFW_Not_Valid)
+{    
+    const esp_partition_t *running =
+        esp_ota_get_running_partition();
+
+    esp_ota_img_states_t state;
+    esp_err_t err =
+        esp_ota_get_state_partition(running, &state);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get OTA state");
+        // esp_ota_mark_app_invalid_rollback_and_reboot();
+        return;
+    }
+    //show partition OTA state
+    switch (state)
+    {
+    case ESP_OTA_IMG_NEW:
+        ESP_LOGD(TAG, "ESP_OTA_IMG_NEW");
+        break;
+    case ESP_OTA_IMG_VALID:
+        ESP_LOGD(TAG, "ESP_OTA_IMG_VALID");
+        break;
+    case ESP_OTA_IMG_INVALID:
+        ESP_LOGD(TAG, "ESP_OTA_IMG_INVALID");
+        break;
+    case ESP_OTA_IMG_ABORTED:
+        ESP_LOGD(TAG, "ESP_OTA_IMG_ABORTED");
+        break;
+    case ESP_OTA_IMG_UNDEFINED:
+        ESP_LOGD(TAG, "ESP_OTA_IMG_UNDEFINED");
+        break;
+    
+    default:
+        break;
+    }
+
+    if (state == ESP_OTA_IMG_PENDING_VERIFY) {
+        ESP_LOGW(TAG, "OTA image pending verification");
+        if (!bFW_Not_Valid) {
+            ESP_LOGI(TAG, "Marking OTA image as valid");
+            esp_ota_mark_app_valid_cancel_rollback();
+        }
+        else {
+            ESP_LOGE(TAG, "OTA validation failed, rolling back");
+            esp_ota_mark_app_invalid_rollback_and_reboot();
+        }
+    }
+}
+/* =========================================================
+ * Датчик HLK-LD2410C
+ * ========================================================= */
 
 // Callback-функция при обнаружении присутствия
 static void on_presence(const hlk_target_data_t *data) {
@@ -58,6 +207,15 @@ static void on_error(const char *error) {
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "[APP] Startup..");
+    ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
+
+    esp_log_level_set("*", ESP_LOG_WARN);
+    esp_log_level_set("OTA", ESP_LOG_WARN);
+    esp_log_level_set("HLK_LD2410C", ESP_LOG_VERBOSE);
+    esp_log_level_set("MAIN", ESP_LOG_VERBOSE);
+
+    bool bOTA_Firmware_not_valid = pdTRUE;
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -66,15 +224,53 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    if (ret!=ESP_OK)
+    {
+        bOTA_Firmware_not_valid=pdTRUE;
+    }
+    
+    // Подключение к Wi-Fi
+    ESP_LOGI(TAG, "Подключаюсь к Wi-Fi");
+    
+    // Используем стандартный пример для подключения Wi-Fi
+
     WFc_Init();
     WFc_Start();
+    
+    // Выводим информацию о системе
+    print_system_info();
+    ret = WFc_ConnectionWait(pdMS_TO_TICKS(WIFI_WAIT_BEFOR_OTA));
+    if (ret!=ESP_OK)
+    {
+        bOTA_Firmware_not_valid=pdTRUE;
+    }
+    
+    // Инициализация OTA
+    ESP_LOGI(TAG, "Инициализация OTA...");
+    // Копируем дефолтный конфиг
+    ota_config_t config = ota_config;
+
+    // Заполняем имя приложения
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    strncpy(config.app_name, app_desc->project_name, sizeof(config.app_name) - 1);
+    config.app_name[sizeof(config.app_name) - 1] = '\0';
+    ret = ota_init(&config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Ошибка инициализации OTA: %s", esp_err_to_name(ret));
+        bOTA_Firmware_not_valid=pdTRUE;
+    }
+    check_all_versions();
+
+    // Запускаем фоновую проверку обновлений
+    ESP_LOGI(TAG, "Запуск службы проверки обновлений...");
+    ota_start_background_check();
+
     mqtt_init();
 
-    ESP_LOGI(TAG, "Starting HLK-LD2410C BLE Radar Demo");
+    ESP_LOGI(TAG, "Starting HLK-LD2410C BLE Radar");
     
     // Конфигурация модуля
-    hlk_config_t config = {
+    hlk_config_t hlk_config = {
         .device_name_prefix = "HLK-LD2410_9A95",
         .ble_scan_timeout = 30, // секунды
         .auto_reconnect = true,
@@ -85,16 +281,35 @@ void app_main(void)
     };
     
     // Инициализация модуля
-    ret = hlk_ld2410c_init(&config);
+    ret = hlk_ld2410c_init(&hlk_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize HLK module");
-        return;
+        ESP_LOGE(TAG, "Ошибка инициализации OTA: %s", esp_err_to_name(ret));
+        bOTA_Firmware_not_valid=pdTRUE;
     }
     
     // Запуск поиска устройства
     ret = hlk_ld2410c_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start HLK module");
-        return;
+        ESP_LOGE(TAG, "Ошибка инициализации OTA: %s", esp_err_to_name(ret));
+        bOTA_Firmware_not_valid=pdTRUE;
     }
+
+    //ждём отработки задачи проверки ОТА
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ota_status_t status = ota_get_status();
+
+    while ((status==OTA_STATUS_CHECKING)||(status==OTA_STATUS_IDLE))
+    {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        status = ota_get_status();
+    }
+    if ((status!=OTA_STATUS_FAILED)&&(status!=OTA_STATUS_VERSION_ERROR))
+    {
+        bOTA_Firmware_not_valid=pdFALSE;
+    }
+    
+    //Подключились к серверу и проверили наличие прошивки там. Если связи с сервером нет, а мы только что обновились - значит что-то не так с кодом -> откатимся на старую прошивку
+    check_and_validate_ota(bOTA_Firmware_not_valid); 
+    // Основной цикл приложения
+    ESP_LOGI(TAG, "Приложение инициализировано.");
 }

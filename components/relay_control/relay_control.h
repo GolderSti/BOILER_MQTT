@@ -5,7 +5,7 @@
 
 #define RELAY_ON_STATE 1
 #define RELAY_OFF_STATE 0
-#define RLY_STATE_DEFAULT_VALUE 0;
+#define RLY_STATE_DEFAULT_VALUE RELAY_OFF_STATE;
 #define RLY_MSG_CONTROL 1
 
 typedef struct

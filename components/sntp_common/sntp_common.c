@@ -147,11 +147,11 @@ void cmn_sntp_init(sntp_callback_type callback)
             tzset();
 
             // Запускаем синхронизацию времени с SNTP
-            sntp_setoperatingmode(SNTP_OPMODE_POLL);
-            sntp_set_time_sync_notification_cb(sntp_notification);
-            sntp_setservername(0, "192.168.2.56");
-            sntp_setservername(1, "time.nist.gov");
-            sntp_init();
+            esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+            esp_sntp_set_time_sync_notification_cb(sntp_notification);
+            esp_sntp_setservername(0, "192.168.2.56");
+            esp_sntp_setservername(1, "time.nist.gov");
+            esp_sntp_init();
             
             if (!esp_sntp_enabled()) {
                 ESP_LOGE(TAG, "\t[SNTP INIT]\tFAILED to start client");
@@ -159,7 +159,7 @@ void cmn_sntp_init(sntp_callback_type callback)
             }            
             
             ESP_LOGD(TAG,"\t[SNTP INIT]\tOK");
-            sntp_set_sync_interval(24 * 60 * 60 * 1000); // 24 часа
+            esp_sntp_set_sync_interval(24 * 60 * 60 * 1000); // 24 часа
             xEventGroupSetBits(xTimeEventGroup, TIME_STARTED);
             sntp_initialized = true;
         } else {

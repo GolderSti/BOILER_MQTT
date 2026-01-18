@@ -101,13 +101,44 @@ static void rly_MQTT_MSG_send(uint32_t uTopicNmb, uint32_t uMsg)
  * @return ESP_OK — успех, иначе код ошибки.
  */
 esp_err_t nvs_storage_init(const char *partition_name) {
-    esp_err_t err = nvs_flash_init_partition(partition_name);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init NVS partition '%s': %s", partition_name, esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "NVS partition '%s' initialized", partition_name);
+    // esp_err_t err = nvs_flash_init_partition(partition_name);
+    // if (err != ESP_OK) {
+    //     ESP_LOGE(TAG, "Failed to init NVS partition '%s': %s", partition_name, esp_err_to_name(err));
+    // } else {
+    //     ESP_LOGI(TAG, "NVS partition '%s' initialized", partition_name);
+    // }
+    // return err;
+
+    ESP_LOGI(TAG, "Initializing custom storage partition...");
+    
+    // Находим наш раздел
+    const esp_partition_t* partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_ANY,
+        "storage");
+    
+    if (partition == NULL) {
+        ESP_LOGE(TAG, "Storage partition not found!");
+        return ESP_FAIL;
     }
-    return err;
+    
+    ESP_LOGI(TAG, "Found storage partition: size=%dKB", partition->size / 1024);
+    
+    // Инициализируем NVS в этом разделе
+    // nvs_sec_cfg_t cfg;
+    // nvs_flash_secure_init_partition(partition_name, &cfg);
+    
+    // Альтернативный способ - ручная инициализация
+    esp_err_t ret = nvs_flash_init_partition("storage");
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "Erasing %s partition...", partition_name);
+        ESP_ERROR_CHECK(nvs_flash_erase_partition("storage"));
+        ret = nvs_flash_init_partition("storage");
+    }
+    
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "%s partition initialized", partition_name);
+    return ESP_OK;
 }
 
 /**
@@ -127,7 +158,7 @@ esp_err_t nvs_storage_set_u32(
     esp_err_t err;
 
     // Открываем namespace
-    err = nvs_open_from_partition(partition_name, namespace_name, NVS_READWRITE, &handle);
+    err = nvs_open_from_partition("storage", "config", NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open namespace '%s' in partition '%s': %s",
                  namespace_name, partition_name, esp_err_to_name(err));
@@ -196,6 +227,23 @@ esp_err_t nvs_storage_get_u32(
     ESP_LOGD(TAG, "Read u32 key '%s' = %u from namespace '%s'", key, *out_value, namespace_name);
     nvs_close(handle);
     return ESP_OK;
+}
+
+//show current partitions to LOG
+void check_partitions(void) {
+    esp_partition_iterator_t it = esp_partition_find(
+        ESP_PARTITION_TYPE_DATA, 
+        ESP_PARTITION_SUBTYPE_ANY, 
+        NULL);
+    
+    while (it != NULL) {
+        const esp_partition_t* p = esp_partition_get(it);
+        ESP_LOGI("PART", "Found: %-12s @ 0x%06x size: %6d (%.1fKB) type:%d subtype:%d",
+                p->label, p->address, p->size, p->size/1024.0,
+                p->type, p->subtype);
+        it = esp_partition_next(it);
+    }
+    esp_partition_iterator_release(it);
 }
 
 /**

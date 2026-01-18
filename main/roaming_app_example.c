@@ -28,6 +28,7 @@
 #include "ota.h"
 #include "mqtt_common.h"
 #include "hlk_ld2410c.h"
+#include "relay_control.h"
 
 const char *TAG = "MAIN";
 
@@ -136,19 +137,19 @@ static void check_and_validate_ota(bool bFW_Not_Valid)
     switch (state)
     {
     case ESP_OTA_IMG_NEW:
-        ESP_LOGD(TAG, "ESP_OTA_IMG_NEW");
+        ESP_LOGI(TAG, "ESP_OTA_IMG_NEW");
         break;
     case ESP_OTA_IMG_VALID:
-        ESP_LOGD(TAG, "ESP_OTA_IMG_VALID");
+        ESP_LOGI(TAG, "ESP_OTA_IMG_VALID");
         break;
     case ESP_OTA_IMG_INVALID:
-        ESP_LOGD(TAG, "ESP_OTA_IMG_INVALID");
+        ESP_LOGI(TAG, "ESP_OTA_IMG_INVALID");
         break;
     case ESP_OTA_IMG_ABORTED:
-        ESP_LOGD(TAG, "ESP_OTA_IMG_ABORTED");
+        ESP_LOGI(TAG, "ESP_OTA_IMG_ABORTED");
         break;
     case ESP_OTA_IMG_UNDEFINED:
-        ESP_LOGD(TAG, "ESP_OTA_IMG_UNDEFINED");
+        ESP_LOGI(TAG, "ESP_OTA_IMG_UNDEFINED");
         break;
     
     default:
@@ -163,6 +164,7 @@ static void check_and_validate_ota(bool bFW_Not_Valid)
         }
         else {
             ESP_LOGE(TAG, "OTA validation failed, rolling back");
+            vTaskDelay(pdMS_TO_TICKS(3000));
             esp_ota_mark_app_invalid_rollback_and_reboot();
         }
     }
@@ -210,10 +212,17 @@ void app_main(void)
     ESP_LOGI(TAG, "[APP] Startup..");
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
 
-    esp_log_level_set("*", ESP_LOG_WARN);
-    esp_log_level_set("OTA", ESP_LOG_WARN);
-    esp_log_level_set("HLK_LD2410C", ESP_LOG_VERBOSE);
-    esp_log_level_set("MAIN", ESP_LOG_VERBOSE);
+    esp_log_level_set("*", ESP_LOG_VERBOSE);
+    // esp_log_level_set("OTA", ESP_LOG_WARN);
+    // esp_log_level_set("HLK_LD2410C", ESP_LOG_VERBOSE);
+    // esp_log_level_set("MAIN", ESP_LOG_VERBOSE);
+    // esp_log_level_set("RLYCNTR", ESP_LOG_VERBOSE);
+    // esp_log_level_set("RLY_TSK", ESP_LOG_VERBOSE);
+    // esp_log_level_set("RLYAUTO", ESP_LOG_VERBOSE);
+    // esp_log_level_set("MQTTCMN", ESP_LOG_VERBOSE);
+    
+    
+    
 
     bool bOTA_Firmware_not_valid = pdTRUE;
     //Initialize NVS
@@ -307,8 +316,11 @@ void app_main(void)
     {
         bOTA_Firmware_not_valid=pdFALSE;
     }
-    
+    //
+    ESP_LOGI(TAG,"Starting Relay Module");
+    Relay_Control_Init();
     //Подключились к серверу и проверили наличие прошивки там. Если связи с сервером нет, а мы только что обновились - значит что-то не так с кодом -> откатимся на старую прошивку
+    ESP_LOGI(TAG,"Validating OTA");
     check_and_validate_ota(bOTA_Firmware_not_valid); 
     // Основной цикл приложения
     ESP_LOGI(TAG, "Приложение инициализировано.");

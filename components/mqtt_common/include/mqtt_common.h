@@ -1,4 +1,3 @@
-static const char *MQTT_TAG = "/ESP32";               //Topic preamble
 
 // Subsribed topics callback
 typedef void (*SubscibedCallback)(const char *response);

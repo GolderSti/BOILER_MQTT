@@ -19,20 +19,32 @@
 #include "esp_sntp.h"
 #include "sun_time_common.h"
 
-#define RELAY_OUTPUT_IO_1   16
+#define RELAY_OUTPUT_IO_1   4
+#define RELAY_OUTPUT_IO_2   5
 #define GPIO_OUTPUT_PIN_SEL  (1ULL<<RELAY_OUTPUT_IO_1)
 //#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<GPIO_OUTPUT_IO_1))
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
 #define TPC_RLY1 0
 #define TPC_RLY1_AUTO 1
+#define TPC_RLY2 2
+#define TPC_RLY2_AUTO 3
+static const gpio_num_t rly_pins[] = {
+                                    RELAY_OUTPUT_IO_1,
+                                    RELAY_OUTPUT_IO_2,
+                                    };
 static const char *pcTopics[] = {                    
                                 [TPC_RLY1]="/Relay1",
                                 [TPC_RLY1_AUTO]="/Relay1/Auto",
+                                [TPC_RLY2]="/Relay2",
+                                [TPC_RLY2_AUTO]="/Relay2/Auto",
                                 };
-#define CONTROL_TOPICS_COUNT 2
-static const char *pcControlTopics[] = {"/Relay1/Set",       //0
+#define CONTROL_TOPICS_COUNT 4
+static const char *pcControlTopics[] = {
+                                        "/Relay1/Set",       //0
                                         "/Relay1/Auto/Set",
+                                        "/Relay2/Set",
+                                        "/Relay2/Auto/Set",
                                         };
 
 typedef struct 
@@ -43,9 +55,15 @@ typedef struct
 
 static QueueHandle_t xRelay_Msg_Queue;
 static int32_t uiOnTime=480, uiOffTime=1200;
+static SemaphoreHandle_t xAutoPowerMutex;
+static int8_t iAutoPower; 
 static SemaphoreHandle_t rc_TimeMutex;
-static const char *CFG_STATE="storage";
-static const char *CFG_AUTO="config";
+static const char *CFG_STATE="state";
+static const char *CFG_AUTO="auto";
+static const char *CFG_STATE2="state2";
+static const char *CFG_AUTO2="auto2";
+
+
 
 /*!
  * Expand Queue rslt to string
@@ -265,23 +283,36 @@ esp_err_t nvs_storage_deinit(const char *partition_name) {
 /*!
  *  @brief Set GPIO output and send MQTT msg of new state
  *
+ *  @param[in] uRelayNumber     : relay number 
+ *  @param[in] uRelayNewState   : new Relay state1
+ *
+ */
+static void rly_set_output_num(uint32_t uRelayNumber, uint32_t uRelayNewState)
+{
+    if (uRelayNewState)
+    {
+        //Relay on
+        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tON\t,%i",uRelayNumber,RELAY_ON_STATE);
+        gpio_set_level(rly_pins[uRelayNumber], RELAY_ON_STATE);
+    }
+    else
+    {
+        //relay off
+        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tOFF\t,%i",uRelayNumber,RELAY_OFF_STATE);
+        gpio_set_level(rly_pins[uRelayNumber], RELAY_OFF_STATE);
+    }
+}
+
+/*!
+ *  @brief Set GPIO output and send MQTT msg of new state
+ *
  *  @param[in] uRelayNewState   : new Relay state1
  *
  */
 static void rly_set_output(uint32_t uRelayNewState)
 {
-    if (uRelayNewState)
-    {
-        //Relay on
-        ESP_LOGI(TAG, "\t[RELAY_SET]\tON\t,%i",RELAY_ON_STATE);
-        gpio_set_level(RELAY_OUTPUT_IO_1, RELAY_ON_STATE);
-    }
-    else
-    {
-        //relay off
-        ESP_LOGI(TAG, "\t[RELAY_SET]\tOFF\t,%i",RELAY_OFF_STATE);
-        gpio_set_level(RELAY_OUTPUT_IO_1, RELAY_OFF_STATE);
-    }
+    rly_set_output_num(0,uRelayNewState);
+    rly_set_output_num(1,uRelayNewState);
 }
 
 /*!
@@ -351,13 +382,46 @@ void Relay_Auto_Control_Task(void *pvParameters)
         {
                 ESP_LOGI(TAG,"\t[Auto_turn]\tOFF");
                 iFiredOff=1;
-                Relay_Change_State(RELAY_OFF_STATE);
+                int8_t ilocAutoPower;
+                if (xAutoPowerMutex == NULL) {
+                    xAutoPowerMutex = xSemaphoreCreateMutex();
+                    if (xAutoPowerMutex == NULL) {
+                        ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                        return;
+                    }
+                }
+                
+                ilocAutoPower = iAutoPower;
+                xSemaphoreGive(xAutoPowerMutex);
+
+                if ((ilocAutoPower&0x01)==0x01){
+                    Relay_Change_State(0,RELAY_OFF_STATE);
+                }
+                if ((ilocAutoPower&0x02)==0x02){
+                    Relay_Change_State(1,RELAY_OFF_STATE);
+                }
         }//check on time 
         else if ((iCurTime==iloc_OnTime)&&(iFiredOn==0))
         {
                 ESP_LOGI(TAG,"\t[Auto_turn]\tON");
                 iFiredOn=1;
-                Relay_Change_State(RELAY_ON_STATE);        
+                int8_t ilocAutoPower;
+                if (xAutoPowerMutex == NULL) {
+                    xAutoPowerMutex = xSemaphoreCreateMutex();
+                    if (xAutoPowerMutex == NULL) {
+                        ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                        return;
+                    }
+                }
+                
+                ilocAutoPower = iAutoPower;
+                xSemaphoreGive(xAutoPowerMutex);
+                if ((ilocAutoPower&0x01)==0x01){
+                    Relay_Change_State(0,RELAY_ON_STATE);
+                }
+                if ((ilocAutoPower&0x02)==0x02){
+                    Relay_Change_State(1,RELAY_ON_STATE);
+                }
         } 
         //reset one fire flag
         if ((iFiredOff!=0)&&(iCurTime!=iloc_OffTime))
@@ -417,10 +481,12 @@ void rly_Change_AutoPower(uint32_t uNewState)
     {
         rly_MQTT_MSG_send(TPC_RLY1_AUTO, 0);
         nvs_storage_set_u32(CFG_AUTO,0);
+        nvs_storage_set_u32(CFG_AUTO2,0);
     }else
     {
         rly_MQTT_MSG_send(TPC_RLY1_AUTO, 1);
         nvs_storage_set_u32(CFG_AUTO,1);
+        nvs_storage_set_u32(CFG_AUTO2,1);
     }
     
     
@@ -435,7 +501,7 @@ void rly_Change_AutoPower(uint32_t uNewState)
 void Relay_Control_Task(void *pvParameters)
 {
     static const char *TAG = "RLY_TSK";
-    static RelayState_t xRelayState;
+    static RelayState_t xRelay1State,xRelay2State;
     // static uint32_t uRelayState = RELAY_OFF_STATE;
     Relay_Msg_t xRelay_Msg;
     esp_err_t err;
@@ -444,15 +510,15 @@ void Relay_Control_Task(void *pvParameters)
     ESP_LOGI(TAG,"\tRElay_Control_task \t START");
     ESP_LOGD(TAG, "\t[Free memory]:\t%d bytes", esp_get_free_heap_size());
     //trying to read state from file
-    xRelayState.uState=RELAY_OFF_STATE;
-    xRelayState.uAutoState=0;
+    xRelay1State.uState=RELAY_OFF_STATE;
+    xRelay1State.uAutoState=0;
     
-    err = nvs_storage_get_u32(CFG_STATE, &xRelayState.uState);
+    err = nvs_storage_get_u32(CFG_STATE, &xRelay1State.uState);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay state value: %u", xRelayState.uState);
+        ESP_LOGI(TAG,"Load relay state value: %u", xRelay1State.uState);
     } else 
     {
-        xRelayState.uState=RLY_STATE_DEFAULT_VALUE;
+        xRelay1State.uState=RLY_STATE_DEFAULT_VALUE;
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             ESP_LOGW(TAG,"Key not found");
         } else {
@@ -460,12 +526,12 @@ void Relay_Control_Task(void *pvParameters)
         }
     }
 
-    err = nvs_storage_get_u32(CFG_AUTO, &xRelayState.uAutoState);
+    err = nvs_storage_get_u32(CFG_AUTO, &xRelay1State.uAutoState);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay auto value: %u\n", xRelayState.uAutoState);
+        ESP_LOGI(TAG,"Load relay auto value: %u\n", xRelay1State.uAutoState);
     } else 
     {
-        xRelayState.uAutoState=RLY_STATE_DEFAULT_VALUE;
+        xRelay1State.uAutoState=RLY_STATE_DEFAULT_VALUE;
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             ESP_LOGW(TAG,"Key not found");
         } else {
@@ -474,9 +540,12 @@ void Relay_Control_Task(void *pvParameters)
     }
 
     //set initial state
-    rly_set_output(xRelayState.uState);
-    rly_MQTT_MSG_send(TPC_RLY1, xRelayState.uState);                
-    rly_Change_AutoPower(xRelayState.uAutoState);
+    rly_set_output(xRelay1State.uState);
+    rly_set_output_num(0,xRelay1State.uState);
+    rly_set_output_num(1,xRelay2State.uState);
+    rly_MQTT_MSG_send(TPC_RLY1, xRelay1State.uState);                
+    rly_MQTT_MSG_send(TPC_RLY2, xRelay1State.uState);                
+    rly_Change_AutoPower(xRelay1State.uAutoState);
     ESP_LOGI(TAG,"\t[Start Main LOOP]\t...");
     while (1)
     {
@@ -488,9 +557,14 @@ void Relay_Control_Task(void *pvParameters)
             switch (xRelay_Msg.uMsgType)
             {
             case RLY_MSG_CONTROL:
-                rly_set_output(xRelay_Msg.uMsg);
+                rly_set_output_num(0,xRelay_Msg.uMsg);
                 rly_MQTT_MSG_send(TPC_RLY1, xRelay_Msg.uMsg);  
                 nvs_storage_set_u32(CFG_STATE,xRelay_Msg.uMsg);              
+                break;
+            case RLY2_MSG_CONTROL:
+                rly_set_output_num(1,xRelay_Msg.uMsg);
+                rly_MQTT_MSG_send(TPC_RLY2, xRelay_Msg.uMsg);  
+                nvs_storage_set_u32(CFG_STATE2,xRelay_Msg.uMsg);              
                 break;
             default:
                 ESP_LOGW(TAG, "\tUNKNOWN MESSAGE");
@@ -503,14 +577,24 @@ void Relay_Control_Task(void *pvParameters)
 /*!
  *  @brief add msg to Relay_msg_queue
  *
+ *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second
  *  @param[in] uNewState   :    Desireable relay new state
  *
  */
-void Relay_Change_State(uint32_t uNewState)
+void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
 {
     Relay_Msg_t xRelay_Msg;
     BaseType_t xStatus;
-
+    switch (uRelayNumber)
+    {
+    case 0:
+        xRelay_Msg.uMsgType=RLY_MSG_CONTROL;
+        break;
+    case 1:
+        xRelay_Msg.uMsgType=RLY2_MSG_CONTROL;
+    default:
+        break;
+    }
     xRelay_Msg.uMsgType=RLY_MSG_CONTROL;
     xRelay_Msg.uMsg=uNewState;
     xStatus = xQueueSendToBack( xRelay_Msg_Queue, &xRelay_Msg, 0 );
@@ -553,17 +637,40 @@ static int32_t cmn_String_to_int32(const char *pcMessage) {
  *  @param[in] pcMessage         : contain data that was received
  *
  */
-static void rly_MQTT_Callback(const char *pcMessage) {
+static void rly_MQTT_Callback1(const char *pcMessage) {
     uint32_t uState;
 
     //Convert to int
     uState=cmn_String_to_int32(pcMessage);
     if (uState==0){
         ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN OFF");
-        Relay_Change_State(RELAY_OFF_STATE);
+        Relay_Change_State(0, RELAY_OFF_STATE);
     } else if (uState==1){
         ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN ON");
-        Relay_Change_State(RELAY_ON_STATE);
+        Relay_Change_State(0, RELAY_ON_STATE);
+    }else{
+        ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
+    }
+    // free(pcTmp);
+}
+
+/*!
+ *  @brief Run when MQTT client receive MSG in /Relay1 topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_Callback2(const char *pcMessage) {
+    uint32_t uState;
+
+    //Convert to int
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN OFF");
+        Relay_Change_State(1, RELAY_OFF_STATE);
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN ON");
+        Relay_Change_State(1, RELAY_ON_STATE);
     }else{
         ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
     }
@@ -576,7 +683,53 @@ static void rly_MQTT_Callback(const char *pcMessage) {
  *  @param[in] pcMessage         : contain data that was received
  *
  */
-static void rly_MQTT_auto_Callback(const char *pcMessage) {
+static void rly_MQTT_auto_Callback1(const char *pcMessage) {
+    uint32_t uState;
+
+    // pcTmp=malloc(sizeof(pcMessage));
+    // memcpy(pcTmp, pcMessage, sizeof(pcMessage));
+    
+
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN OFF");
+    
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower&0xFE;
+        xSemaphoreGive(xAutoPowerMutex);
+    
+        rly_Change_AutoPower(0);
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN ON");
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower|0x01;
+        xSemaphoreGive(xAutoPowerMutex);
+        rly_Change_AutoPower(1);
+    }else{
+        ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
+    }
+    // free(pcTmp);
+}
+
+/*!
+ *  @brief Run when MQTT client receive MSG in /Relay1/Auto topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_auto_Callback2(const char *pcMessage) {
     uint32_t uState;
 
     // pcTmp=malloc(sizeof(pcMessage));
@@ -585,9 +738,27 @@ static void rly_MQTT_auto_Callback(const char *pcMessage) {
     uState=cmn_String_to_int32(pcMessage);
     if (uState==0){
         ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN OFF");
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower&0xFD; //0b11111101
+        xSemaphoreGive(xAutoPowerMutex);
         rly_Change_AutoPower(0);
     } else if (uState==1){
         ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN ON");
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower|0x02;
+        xSemaphoreGive(xAutoPowerMutex);
         rly_Change_AutoPower(1);
     }else{
         ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
@@ -631,8 +802,10 @@ void Relay_Control_Init()
     }
 
     mqtt_init();
-    mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback);
-    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_auto_Callback);
+    mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback1);
+    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_auto_Callback1);
+    mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);
+    mqtt_Topic_Subsribe(pcControlTopics[3],&rly_MQTT_auto_Callback2);
     
     xTaskCreate(Relay_Control_Task, "Relay Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
     // xAutoTaskHndl=NULL;

@@ -37,7 +37,7 @@ const char *TAG = "MAIN";
 #define WIFI_SSID "Sti-WiFi"
 #define WIFI_PASS "6k8wSbcN"
 #define WIFI_WAIT_BEFOR_OTA 30000 //wait for wifi befor OTA to reise an error
-#define BTN1_PIN 6
+#define BTN1_PIN GPIO_NUM_6
 // Конфигурация OTA
 static const ota_config_t ota_config = {
     .server_url = "http://esp-update.lan:8080",
@@ -207,27 +207,23 @@ static void on_error(const char *error) {
     ESP_LOGE(TAG, "Error: %s", error);
 }
 
-void btn_cb(uint8_t gpio_num, uint8_t event){
-    switch (event)
-    {
-    case BTN_EVENT_PRESSED:
-        ESP_LOGI(TAG, "BTN PRESSED");
-        break;
-    case BTN_EVENT_RELEASED:
-        ESP_LOGI(TAG, "BTN RELEASED");
-        break;
-    case BTN_EVENT_CLICK:
-        ESP_LOGI(TAG, "BTN CLICK");
-        break;
-    case BTN_EVENT_DOUBLE_CLICK:
-        ESP_LOGI(TAG, "BTN DOUBLE_CLICK");
-        break;
-    case BTN_EVENT_LONG_PRESS:
-        ESP_LOGI(TAG, "BTN LONG_PRESS");
-        break;
-    default:
-        ESP_LOGI(TAG,"BTN state out of bound");
-        break;
+void button_callback(uint8_t gpio_num, uint8_t event) {
+    switch(event) {
+        case BTN_EVENT_PRESSED:
+            ESP_LOGI(TAG, "GPIO %d: PRESSED", gpio_num);
+            break;
+        case BTN_EVENT_RELEASED:
+            ESP_LOGI(TAG, "GPIO %d: RELEASED", gpio_num);
+            break;
+        case BTN_EVENT_CLICK:
+            ESP_LOGI(TAG, "GPIO %d: CLICK", gpio_num);
+            break;
+        case BTN_EVENT_LONG_PRESS:
+            ESP_LOGI(TAG, "GPIO %d: LONG PRESS", gpio_num);
+            break;
+        case BTN_EVENT_DOUBLE_CLICK:
+            ESP_LOGI(TAG, "GPIO %d: DOUBLE CLICK", gpio_num);
+            break;
     }
 }
 
@@ -345,9 +341,12 @@ void app_main(void)
     ESP_LOGI(TAG,"Starting Relay Module");
     Relay_Control_Init();
     ESP_LOGI(TAG,"Starting Buttons");
+    // Инициализация модуля кнопок
     button_init();
-    button_config_t btn_cfg = BUTTON_CONFIG_DEFAULT();
-    button_register(BTN1_PIN,&btn_cfg,btn_cb);
+    
+    // Регистрация кнопки с настройками по умолчанию
+    button_config_t default_cfg = BUTTON_CONFIG_DEFAULT();
+    button_register(BTN1_PIN, &default_cfg, button_callback);
     //Подключились к серверу и проверили наличие прошивки там. Если связи с сервером нет, а мы только что обновились - значит что-то не так с кодом -> откатимся на старую прошивку
     ESP_LOGI(TAG,"Validating OTA");
     check_and_validate_ota(bOTA_Firmware_not_valid); 

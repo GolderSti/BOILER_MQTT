@@ -9,6 +9,13 @@
 extern "C" {
 #endif
 
+typedef enum {
+    BTN_PULL_UP = 0,
+    BTN_PULL_DOWN,
+    BTN_PULL_UP_DOWN,
+    BTN_PULL_DISABLE
+} button_pull_mode_t;
+
 /**
  * @brief Тип callback-функции, вызываемой при событии кнопки.
  * @param gpio_num Номер GPIO, на котором произошло событие
@@ -26,7 +33,7 @@ typedef enum {
     BTN_EVENT_LONG_PRESS,      ///< Долгое нажатие
     BTN_EVENT_DOUBLE_CLICK,    ///< Двойной клик
     BTN_EVENT_MAX
-} button_event_t;
+} button_event_state_t;
 
 /**
  * @brief Конфигурация кнопки.
@@ -36,7 +43,7 @@ typedef struct {
     uint32_t debounce_ms;      ///< Время подавления дребезга (мс)
     uint32_t long_press_ms;    ///< Время для определения долгого нажатия (мс)
     uint32_t double_click_ms;  ///< Макс. время между кликов для двойного нажатия (мс)
-    gpio_pull_mode_t pull;     ///< Режим подтяжки
+    button_pull_mode_t pull;     ///< Режим подтяжки
 } button_config_t;
 
 /**
@@ -47,7 +54,7 @@ typedef struct {
     .debounce_ms = 50,           \
     .long_press_ms = 1000,       \
     .double_click_ms = 400,      \
-    .pull = GPIO_PULLUP_ONLY     \
+    .pull = BTN_PULL_UP          \
 }
 
 /**
@@ -79,12 +86,6 @@ bool button_unregister(uint8_t gpio_num);
  * @return true если кнопка нажата, false если отпущена
  */
 bool button_get_state(uint8_t gpio_num);
-
-/**
- * @brief Обработка событий кнопок (вызывать в цикле или задаче).
- * @note Альтернатива использованию прерываний.
- */
-void button_poll(void);
 
 #ifdef __cplusplus
 }

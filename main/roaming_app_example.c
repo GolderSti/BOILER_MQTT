@@ -207,6 +207,13 @@ static void on_error(const char *error) {
     ESP_LOGE(TAG, "Error: %s", error);
 }
 
+/* =========================================================
+ * Связь реле и кнопок
+ * ========================================================= */
+void main_switch_change(){
+    
+}
+
 void button_callback(uint8_t gpio_num, uint8_t event) {
     static const char* event_names[] = {
         "PRESSED", "RELEASED", "CLICK", "LONG_PRESS", "DOUBLE_CLICK"

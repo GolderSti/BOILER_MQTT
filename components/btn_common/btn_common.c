@@ -157,8 +157,10 @@ static void button_task(void* arg) {
                 case BTN_EVT_TIMER_DEBOUNCE:
                     // Таймер антидребезга сработал
 					ESP_LOGD(TAG,"BTN_EVT_TIMER_DEBOUNCE");
-                    btn->debounced_state = processed_state;
-					handle_debounced_event(btn, processed_state);
+                    if (processed_state != btn->debounced_state) {
+                        btn->debounced_state = processed_state;
+                        handle_debounced_event(btn, processed_state);
+                    }
                     break;
                     
                 case BTN_EVT_TIMER_LONGPRESS:
@@ -285,9 +287,9 @@ static void handle_debounced_event(button_info_t* btn, bool state) {
                                
             default:
                 // Другие состояния
-                if (btn->callback) {
-                    btn->callback(btn->gpio_num, BTN_EVENT_RELEASED);
-                }
+                // if (btn->callback) {
+                //     btn->callback(btn->gpio_num, BTN_EVENT_RELEASED);
+                // }
 				ESP_LOGD(TAG,"btn.state %i", btn->state);
                 reset_button_state(btn);
                 break;

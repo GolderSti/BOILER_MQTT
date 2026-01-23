@@ -208,23 +208,12 @@ static void on_error(const char *error) {
 }
 
 void button_callback(uint8_t gpio_num, uint8_t event) {
-    switch(event) {
-        case BTN_EVENT_PRESSED:
-            ESP_LOGI(TAG, "GPIO %d: PRESSED", gpio_num);
-            break;
-        case BTN_EVENT_RELEASED:
-            ESP_LOGI(TAG, "GPIO %d: RELEASED", gpio_num);
-            break;
-        case BTN_EVENT_CLICK:
-            ESP_LOGI(TAG, "GPIO %d: CLICK", gpio_num);
-            break;
-        case BTN_EVENT_LONG_PRESS:
-            ESP_LOGI(TAG, "GPIO %d: LONG PRESS", gpio_num);
-            break;
-        case BTN_EVENT_DOUBLE_CLICK:
-            ESP_LOGI(TAG, "GPIO %d: DOUBLE CLICK", gpio_num);
-            break;
-    }
+    static const char* event_names[] = {
+        "PRESSED", "RELEASED", "CLICK", "LONG_PRESS", "DOUBLE_CLICK"
+    };
+    
+    ESP_LOGI(TAG, "GPIO %d: %s", gpio_num, 
+             event < BTN_EVENT_MAX ? event_names[event] : "UNKNOWN");
 }
 
 void app_main(void)
@@ -346,6 +335,10 @@ void app_main(void)
     
     // Регистрация кнопки с настройками по умолчанию
     button_config_t default_cfg = BUTTON_CONFIG_DEFAULT();
+    default_cfg.active_low=true;
+    default_cfg.debounce_ms =50;
+    default_cfg.long_press_ms = 1000;
+    default_cfg.double_click_ms = 400;
     button_register(BTN1_PIN, &default_cfg, button_callback);
     //Подключились к серверу и проверили наличие прошивки там. Если связи с сервером нет, а мы только что обновились - значит что-то не так с кодом -> откатимся на старую прошивку
     ESP_LOGI(TAG,"Validating OTA");

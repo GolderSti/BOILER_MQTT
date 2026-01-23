@@ -18,7 +18,6 @@ typedef enum {
     BTN_EVT_GPIO_CHANGE,
     BTN_EVT_TIMER_DEBOUNCE,
     BTN_EVT_TIMER_LONGPRESS,
-    BTN_EVT_TIMER_DBLCLICK
 } button_event_type_t;
 
 typedef struct {
@@ -30,9 +29,10 @@ typedef struct {
 // Состояния конечного автомата
 typedef enum {
     BTN_STATE_IDLE,
-    BTN_STATE_PRESSED,
-    BTN_STATE_WAIT_RELEASE,
-    BTN_STATE_WAIT_DOUBLE
+    BTN_STATE_FIRST_PRESS,
+    BTN_STATE_FIRST_RELEASE,
+    BTN_STATE_SECOND_PRESS,
+    BTN_STATE_PRESSED // Для долгого нажатия
 } btn_fsm_state_t;
 
 // Структура для хранения данных кнопки
@@ -43,20 +43,16 @@ typedef struct {
     
     // Состояние FSM
     btn_fsm_state_t state;
-    bool current_state;
-    bool last_stable_state;
+    bool current_state;        // Текущее физическое состояние
+    bool debounced_state;      // Состояние после антидребезга
     
     // Временные метки
+    uint32_t first_press_time;
     uint32_t press_time;
-    uint32_t release_time;
-    
-    // Счетчики
-    uint8_t click_count;
     
     // Таймеры
     TimerHandle_t debounce_timer;
     TimerHandle_t longpress_timer;
-    TimerHandle_t dblclick_timer;
     
 } button_info_t;
 
@@ -69,15 +65,28 @@ static TaskHandle_t button_task_handle = NULL;
 static button_info_t* find_button_by_gpio(uint8_t gpio_num);
 static void debounce_timer_callback(TimerHandle_t xTimer);
 static void longpress_timer_callback(TimerHandle_t xTimer);
-static void dblclick_timer_callback(TimerHandle_t xTimer);
 static void button_task(void* arg);
-static void process_button_event(button_info_t* btn, bool raw_state, bool from_timer);
+static void handle_debounced_event(button_info_t* btn, bool state);
+static void reset_button_state(button_info_t* btn);
+
+// Сброс состояния кнопки
+static void reset_button_state(button_info_t* btn) {
+    btn->state = BTN_STATE_IDLE;
+	ESP_LOGD(TAG, "BTN_STATE_IDLE");
+    btn->first_press_time = 0;
+    btn->press_time = 0;
+    
+    // Останавливаем все таймеры
+    if (btn->longpress_timer) {
+        xTimerStop(btn->longpress_timer, 0);
+    }
+}
 
 // Обработчик прерывания GPIO
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     uint32_t gpio_num = (uint32_t)arg;
     
-    // Отправляем событие в очередь (без обработки в ISR)
+    // Отправляем событие в очередь
     button_event_t evt = {
         .type = BTN_EVT_GPIO_CHANGE,
         .gpio_num = (uint8_t)gpio_num,
@@ -105,7 +114,7 @@ static void debounce_timer_callback(TimerHandle_t xTimer) {
         .state = gpio_get_level(btn->gpio_num)
     };
     
-    xQueueSend(button_event_queue, &evt, portMAX_DELAY);
+    xQueueSend(button_event_queue, &evt, 0);
 }
 
 // Callback таймера долгого нажатия
@@ -120,22 +129,7 @@ static void longpress_timer_callback(TimerHandle_t xTimer) {
         .state = true
     };
     
-    xQueueSend(button_event_queue, &evt, portMAX_DELAY);
-}
-
-// Callback таймера таймаута двойного клика
-static void dblclick_timer_callback(TimerHandle_t xTimer) {
-    button_info_t* btn = (button_info_t*)pvTimerGetTimerID(xTimer);
-    
-    if (!btn) return;
-    
-    button_event_t evt = {
-        .type = BTN_EVT_TIMER_DBLCLICK,
-        .gpio_num = btn->gpio_num,
-        .state = false
-    };
-    
-    xQueueSend(button_event_queue, &evt, portMAX_DELAY);
+    xQueueSend(button_event_queue, &evt, 0);
 }
 
 // Задача для обработки событий кнопок
@@ -155,31 +149,28 @@ static void button_task(void* arg) {
             switch (evt.type) {
                 case BTN_EVT_GPIO_CHANGE:
                     // При изменении GPIO запускаем таймер антидребезга
-                    xTimerStart(btn->debounce_timer, 0);
+                    if (processed_state != btn->debounced_state) {
+						xTimerStart(btn->debounce_timer, 0);
+					}
                     break;
                     
                 case BTN_EVT_TIMER_DEBOUNCE:
-                    // Таймер антидребезга сработал - обрабатываем событие
-                    process_button_event(btn, processed_state, false);
+                    // Таймер антидребезга сработал
+					ESP_LOGD(TAG,"BTN_EVT_TIMER_DEBOUNCE");
+                    btn->debounced_state = processed_state;
+					handle_debounced_event(btn, processed_state);
                     break;
                     
                 case BTN_EVT_TIMER_LONGPRESS:
                     // Таймер долгого нажатия сработал
-                    if (btn->current_state && btn->state == BTN_STATE_PRESSED) {
-                        if (btn->callback) {
+					ESP_LOGD(TAG,"BTN_EVT_TIMER_LONGPRESS");
+                    if ((btn->state == BTN_STATE_FIRST_PRESS || btn->state == BTN_STATE_SECOND_PRESS) && btn->debounced_state) {
+                        
+						if (btn->callback) {
                             btn->callback(btn->gpio_num, BTN_EVENT_LONG_PRESS);
                         }
-                    }
-                    break;
-                    
-                case BTN_EVT_TIMER_DBLCLICK:
-                    // Таймаут двойного клика
-                    if (btn->state == BTN_STATE_WAIT_DOUBLE && btn->click_count == 1) {
-                        if (btn->callback) {
-                            btn->callback(btn->gpio_num, BTN_EVENT_CLICK);
-                        }
-                        btn->state = BTN_STATE_IDLE;
-                        btn->click_count = 0;
+                        // После долгого нажатия сбрасываем состояние двойного клика
+                        reset_button_state(btn);
                     }
                     break;
             }
@@ -187,38 +178,22 @@ static void button_task(void* arg) {
     }
 }
 
-// Обработка события кнопки (вызывается ТОЛЬКО из задачи)
-static void process_button_event(button_info_t* btn, bool raw_state, bool from_timer) {
+// Обработка события после антидребезга
+static void handle_debounced_event(button_info_t* btn, bool state) {
     uint32_t now = esp_timer_get_time() / 1000;
     
-    // Если состояние изменилось
-    if (raw_state != btn->current_state) {
-        btn->current_state = raw_state;
+    if (state) { // Нажатие
+        btn->press_time = now;
         
-        if (raw_state) { // Нажатие
-            btn->press_time = now;
-            
-            // Останавливаем таймер таймаута двойного клика
-            if (btn->dblclick_timer) {
-                xTimerStop(btn->dblclick_timer, 0);
-            }
-            
-            // Обработка двойного клика
-            if (btn->state == BTN_STATE_WAIT_DOUBLE) {
-                // Второй клик в пределах времени
-                btn->click_count = 2;
-                btn->state = BTN_STATE_PRESSED;
-                
-                if (btn->callback) {
-                    btn->callback(btn->gpio_num, BTN_EVENT_DOUBLE_CLICK);
-                }
-            } else {
+        switch (btn->state) {
+            case BTN_STATE_IDLE:
                 // Первое нажатие
-                btn->click_count = 1;
-                btn->state = BTN_STATE_PRESSED;
+                btn->state = BTN_STATE_FIRST_PRESS;
+				ESP_LOGD(TAG, "BTN_STATE_FIRST_PRESS");
+                btn->first_press_time = now;
                 
                 // Запускаем таймер долгого нажатия
-                if (btn->longpress_timer && btn->config.long_press_ms > 0) {
+                if (btn->config.long_press_ms > 0 && btn->longpress_timer) {
                     xTimerChangePeriod(btn->longpress_timer, 
                                      pdMS_TO_TICKS(btn->config.long_press_ms), 0);
                     xTimerStart(btn->longpress_timer, 0);
@@ -227,46 +202,95 @@ static void process_button_event(button_info_t* btn, bool raw_state, bool from_t
                 if (btn->callback) {
                     btn->callback(btn->gpio_num, BTN_EVENT_PRESSED);
                 }
-            }
-        } else { // Отпускание
-            btn->release_time = now;
-            
-            // Останавливаем таймер долгого нажатия
-            if (btn->longpress_timer) {
-                xTimerStop(btn->longpress_timer, 0);
-            }
-            
-            if (btn->state == BTN_STATE_PRESSED) {
+                if (btn->callback) {
+                    btn->callback(btn->gpio_num, BTN_EVENT_CLICK);
+                }
+                break;
+                
+            case BTN_STATE_FIRST_RELEASE:
+                // Второе нажатие 
+                // Проверяем настроено ли двойное нажатие и попали ли мы в окно двойного нажатия
+                if (btn->config.double_click_ms > 0 && (now-btn->first_press_time) < btn->config.double_click_ms ) {
+					btn->state = BTN_STATE_SECOND_PRESS;
+					ESP_LOGD(TAG, "BTN_STATE_SECOND_PRESS");
+					
+					if (btn->callback) {
+						btn->callback(btn->gpio_num, BTN_EVENT_PRESSED);
+					}
+					if (btn->callback) {
+						btn->callback(btn->gpio_num, BTN_EVENT_CLICK);
+					}
+					if (btn->callback) {
+						btn->callback(btn->gpio_num, BTN_EVENT_DOUBLE_CLICK);
+					}
+					// Запускаем таймер долгого нажатия
+					if (btn->config.long_press_ms > 0 && btn->longpress_timer) {
+						xTimerChangePeriod(btn->longpress_timer, 
+										 pdMS_TO_TICKS(btn->config.long_press_ms), 0);
+						xTimerStart(btn->longpress_timer, 0);
+					}
+                }else{ //если нет, то повторяем одинарное нажатие
+					// Первое нажатие
+					btn->state = BTN_STATE_FIRST_PRESS;
+					ESP_LOGD(TAG, "BTN_STATE_FIRST_PRESS");
+					btn->first_press_time = now;
+					
+					// Запускаем таймер долгого нажатия
+					if (btn->config.long_press_ms > 0 && btn->longpress_timer) {
+						xTimerChangePeriod(btn->longpress_timer, 
+										 pdMS_TO_TICKS(btn->config.long_press_ms), 0);
+						xTimerStart(btn->longpress_timer, 0);
+					}
+					
+					if (btn->callback) {
+						btn->callback(btn->gpio_num, BTN_EVENT_PRESSED);
+					}
+					if (btn->callback) {
+						btn->callback(btn->gpio_num, BTN_EVENT_CLICK);
+					}
+				}
+                
+                break;
+                
+            default:
+                // Другие состояния - игнорируем
+				ESP_LOGD(TAG,"btn.state %i", btn->state);
+                break;
+        }
+    } else { // Отпускание
+        switch (btn->state) {
+            case BTN_STATE_FIRST_PRESS:
+                // Первое отпускание
+                btn->state = BTN_STATE_FIRST_RELEASE;
+				ESP_LOGD(TAG, "BTN_STATE_FIRST_RELEASE");
+                
+                // Останавливаем таймер долгого нажатия
+                if (btn->longpress_timer) {
+                    xTimerStop(btn->longpress_timer, 0);
+                }
+                                
                 if (btn->callback) {
                     btn->callback(btn->gpio_num, BTN_EVENT_RELEASED);
                 }
+                break;
                 
-                // Проверяем было ли это долгое нажатие
-                if ((now - btn->press_time) < btn->config.long_press_ms) {
-                    // Короткое нажатие - проверяем двойной клик
-                    if (btn->config.double_click_ms > 0) {
-                        btn->state = BTN_STATE_WAIT_DOUBLE;
-                        
-                        // Запускаем таймер таймаута двойного клика
-                        if (btn->dblclick_timer) {
-                            xTimerChangePeriod(btn->dblclick_timer,
-                                             pdMS_TO_TICKS(btn->config.double_click_ms), 0);
-                            xTimerStart(btn->dblclick_timer, 0);
-                        }
-                    } else {
-                        // Двойной клик отключен - сразу генерируем клик
-                        if (btn->callback && btn->click_count == 1) {
-                            btn->callback(btn->gpio_num, BTN_EVENT_CLICK);
-                        }
-                        btn->state = BTN_STATE_IDLE;
-                        btn->click_count = 0;
-                    }
-                } else {
-                    // Было долгое нажатие (уже обработано)
-                    btn->state = BTN_STATE_IDLE;
-                    btn->click_count = 0;
+            case BTN_STATE_SECOND_PRESS:
+                                
+                if (btn->callback) {
+                    btn->callback(btn->gpio_num, BTN_EVENT_RELEASED);
                 }
-            }
+                // Второе отпускание - двойной клик завершен
+                reset_button_state(btn);
+                break;
+                               
+            default:
+                // Другие состояния
+                if (btn->callback) {
+                    btn->callback(btn->gpio_num, BTN_EVENT_RELEASED);
+                }
+				ESP_LOGD(TAG,"btn.state %i", btn->state);
+                reset_button_state(btn);
+                break;
         }
     }
 }
@@ -395,24 +419,11 @@ bool button_register(uint8_t gpio_num, const button_config_t *config,
         longpress_timer_callback
     );
     
-    // Таймер таймаута двойного клика
-    if (btn->config.double_click_ms > 0) {
-        snprintf(timer_name, sizeof(timer_name), "dblclick_%d", gpio_num);
-        btn->dblclick_timer = xTimerCreate(
-            timer_name,
-            pdMS_TO_TICKS(btn->config.double_click_ms),
-            pdFALSE,
-            (void*)btn,
-            dblclick_timer_callback
-        );
-    }
-    
     // Проверяем создание таймеров
     if (!btn->debounce_timer || !btn->longpress_timer) {
         ESP_LOGE(TAG, "Failed to create timers for GPIO %d", gpio_num);
         if (btn->debounce_timer) xTimerDelete(btn->debounce_timer, 0);
         if (btn->longpress_timer) xTimerDelete(btn->longpress_timer, 0);
-        if (btn->dblclick_timer) xTimerDelete(btn->dblclick_timer, 0);
         gpio_isr_handler_remove(gpio_num);
         return false;
     }
@@ -423,7 +434,6 @@ bool button_register(uint8_t gpio_num, const button_config_t *config,
         ESP_LOGE(TAG, "Failed to add ISR handler for GPIO %d: %d", gpio_num, ret);
         xTimerDelete(btn->debounce_timer, 0);
         xTimerDelete(btn->longpress_timer, 0);
-        if (btn->dblclick_timer) xTimerDelete(btn->dblclick_timer, 0);
         return false;
     }
     
@@ -433,7 +443,7 @@ bool button_register(uint8_t gpio_num, const button_config_t *config,
         init_state = !init_state;
     }
     btn->current_state = init_state;
-    btn->last_stable_state = init_state;
+    btn->debounced_state = init_state;
     btn->state = BTN_STATE_IDLE;
     
     button_count++;
@@ -455,9 +465,6 @@ bool button_unregister(uint8_t gpio_num) {
             if (buttons[i].longpress_timer) {
                 xTimerDelete(buttons[i].longpress_timer, 0);
             }
-            if (buttons[i].dblclick_timer) {
-                xTimerDelete(buttons[i].dblclick_timer, 0);
-            }
             
             // Сдвигаем массив
             for (int j = i; j < button_count - 1; j++) {
@@ -477,32 +484,5 @@ bool button_unregister(uint8_t gpio_num) {
 // Получение состояния
 bool button_get_state(uint8_t gpio_num) {
     button_info_t* btn = find_button_by_gpio(gpio_num);
-    return btn ? btn->current_state : false;
-}
-
-// Polling режим (опционально)
-void button_poll(void) {
-    // В этой реализации polling не нужен, все через прерывания
-    // Но оставим для совместимости
-    static uint32_t last_poll = 0;
-    uint32_t now = esp_timer_get_time() / 1000;
-    
-    if (now - last_poll < 10) return;
-    last_poll = now;
-    
-    for (int i = 0; i < button_count; i++) {
-        // Простая проверка состояния (без FSM)
-        bool current = gpio_get_level(buttons[i].gpio_num);
-        if (buttons[i].config.active_low) {
-            current = !current;
-        }
-        
-        if (current != buttons[i].current_state) {
-            buttons[i].current_state = current;
-            if (buttons[i].callback) {
-                buttons[i].callback(buttons[i].gpio_num, 
-                    current ? BTN_EVENT_PRESSED : BTN_EVENT_RELEASED);
-            }
-        }
-    }
+    return btn ? btn->debounced_state : false;
 }

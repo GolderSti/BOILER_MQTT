@@ -21,7 +21,8 @@
 
 #define RELAY_OUTPUT_IO_1   4
 #define RELAY_OUTPUT_IO_2   5
-#define GPIO_OUTPUT_PIN_SEL  (1ULL<<RELAY_OUTPUT_IO_1)
+#define RELAY_OUTPUT_IO_3   3  // Добавлен пин для третьего реле
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<RELAY_OUTPUT_IO_2) | (1ULL<<RELAY_OUTPUT_IO_3))  // Обновлено
 //#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<GPIO_OUTPUT_IO_1))
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
@@ -29,22 +30,31 @@ static const char *TAG = "RLYCNTR";
 #define TPC_RLY1_AUTO 1
 #define TPC_RLY2 2
 #define TPC_RLY2_AUTO 3
+#define TPC_RLY3 4           // Добавлено для третьего реле
+#define TPC_RLY3_AUTO 5      // Добавлено для третьего реле
 static const gpio_num_t rly_pins[] = {
                                     RELAY_OUTPUT_IO_1,
                                     RELAY_OUTPUT_IO_2,
+                                    RELAY_OUTPUT_IO_3,  // Добавлено
                                     };
+
 static const char *pcTopics[] = {                    
                                 [TPC_RLY1]="/Relay1",
                                 [TPC_RLY1_AUTO]="/Relay1/Auto",
                                 [TPC_RLY2]="/Relay2",
                                 [TPC_RLY2_AUTO]="/Relay2/Auto",
+                                [TPC_RLY3]="/Relay3",           // Добавлено
+                                [TPC_RLY3_AUTO]="/Relay3/Auto", // Добавлено
                                 };
-#define CONTROL_TOPICS_COUNT 4
+
+#define CONTROL_TOPICS_COUNT 6  // Обновлено с 4 до 6
 static const char *pcControlTopics[] = {
                                         "/Relay1/Set",       //0
-                                        "/Relay1/Auto/Set",
-                                        "/Relay2/Set",
-                                        "/Relay2/Auto/Set",
+                                        "/Relay1/Auto/Set",  //1
+                                        "/Relay2/Set",       //2
+                                        "/Relay2/Auto/Set",  //3
+                                        "/Relay3/Set",       //4 - Добавлено
+                                        "/Relay3/Auto/Set",  //5 - Добавлено
                                         };
 
 typedef struct 
@@ -62,6 +72,8 @@ static const char *CFG_STATE="state";
 static const char *CFG_AUTO="auto";
 static const char *CFG_STATE2="state2";
 static const char *CFG_AUTO2="auto2";
+static const char *CFG_STATE3="state3";  // Добавлено для третьего реле
+static const char *CFG_AUTO3="auto3";    // Добавлено для третьего реле
 
 
 
@@ -283,36 +295,29 @@ esp_err_t nvs_storage_deinit(const char *partition_name) {
 /*!
  *  @brief Set GPIO output and send MQTT msg of new state
  *
- *  @param[in] uRelayNumber     : relay number 
- *  @param[in] uRelayNewState   : new Relay state1
+ *  @param[in] uRelayNumber     : relay number (0, 1 или 2)
+ *  @param[in] uRelayNewState   : new Relay state
  *
  */
 static void rly_set_output_num(uint32_t uRelayNumber, uint32_t uRelayNewState)
 {
+    if (uRelayNumber >= sizeof(rly_pins)/sizeof(rly_pins[0])) {
+        ESP_LOGE(TAG, "\t[RELAY_SET]\tInvalid relay number: %lu", uRelayNumber);
+        return;
+    }
+    
     if (uRelayNewState)
     {
         //Relay on
-        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tON\t,%i",uRelayNumber,RELAY_ON_STATE);
+        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tON\t,%i", uRelayNumber+1, RELAY_ON_STATE);
         gpio_set_level(rly_pins[uRelayNumber], RELAY_ON_STATE);
     }
     else
     {
         //relay off
-        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tOFF\t,%i",uRelayNumber,RELAY_OFF_STATE);
+        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tOFF\t,%i", uRelayNumber+1, RELAY_OFF_STATE);
         gpio_set_level(rly_pins[uRelayNumber], RELAY_OFF_STATE);
     }
-}
-
-/*!
- *  @brief Set GPIO output and send MQTT msg of new state
- *
- *  @param[in] uRelayNewState   : new Relay state1
- *
- */
-static void rly_set_output(uint32_t uRelayNewState)
-{
-    rly_set_output_num(0,uRelayNewState);
-    rly_set_output_num(1,uRelayNewState);
 }
 
 /*!
@@ -400,6 +405,9 @@ void Relay_Auto_Control_Task(void *pvParameters)
                 if ((ilocAutoPower&0x02)==0x02){
                     Relay_Change_State(1,RELAY_OFF_STATE);
                 }
+                if ((ilocAutoPower&0x04)==0x04){  // Добавлено для третьего реле
+                    Relay_Change_State(2,RELAY_OFF_STATE);
+                }
         }//check on time 
         else if ((iCurTime==iloc_OnTime)&&(iFiredOn==0))
         {
@@ -421,6 +429,9 @@ void Relay_Auto_Control_Task(void *pvParameters)
                 }
                 if ((ilocAutoPower&0x02)==0x02){
                     Relay_Change_State(1,RELAY_ON_STATE);
+                }
+                if ((ilocAutoPower&0x04)==0x04){  // Добавлено для третьего реле
+                    Relay_Change_State(2,RELAY_ON_STATE);
                 }
         } 
         //reset one fire flag
@@ -482,11 +493,13 @@ void rly_Change_AutoPower(uint32_t uNewState)
         rly_MQTT_MSG_send(TPC_RLY1_AUTO, 0);
         nvs_storage_set_u32(CFG_AUTO,0);
         nvs_storage_set_u32(CFG_AUTO2,0);
+        nvs_storage_set_u32(CFG_AUTO3,0);
     }else
     {
         rly_MQTT_MSG_send(TPC_RLY1_AUTO, 1);
         nvs_storage_set_u32(CFG_AUTO,1);
         nvs_storage_set_u32(CFG_AUTO2,1);
+        nvs_storage_set_u32(CFG_AUTO3,1);
     }
     
     
@@ -501,52 +514,88 @@ void rly_Change_AutoPower(uint32_t uNewState)
 void Relay_Control_Task(void *pvParameters)
 {
     static const char *TAG = "RLY_TSK";
-    static RelayState_t xRelay1State,xRelay2State;
-    // static uint32_t uRelayState = RELAY_OFF_STATE;
+    static RelayState_t xRelay1State,xRelay2State,xRelay3State;  // Добавлено для третьего реле
     Relay_Msg_t xRelay_Msg;
     esp_err_t err;
 
-
     ESP_LOGI(TAG,"\tRElay_Control_task \t START");
     ESP_LOGD(TAG, "\t[Free memory]:\t%d bytes", esp_get_free_heap_size());
-    //trying to read state from file
+    
+    // Инициализация состояний реле
     xRelay1State.uState=RELAY_OFF_STATE;
     xRelay1State.uAutoState=0;
+    xRelay2State.uState=RELAY_OFF_STATE;
+    xRelay2State.uAutoState=0;
+    xRelay3State.uState=RELAY_OFF_STATE;  // Добавлено
+    xRelay3State.uAutoState=0;           // Добавлено
     
+    // Загрузка состояния первого реле
     err = nvs_storage_get_u32(CFG_STATE, &xRelay1State.uState);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay state value: %u", xRelay1State.uState);
+        ESP_LOGI(TAG,"Load relay 1 state value: %u", xRelay1State.uState);
     } else 
     {
         xRelay1State.uState=RLY_STATE_DEFAULT_VALUE;
         if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG,"Key not found");
+            ESP_LOGW(TAG,"Key not found for relay 1 state");
         } else {
-            ESP_LOGW(TAG,"Read failed");
+            ESP_LOGW(TAG,"Read failed for relay 1 state");
         }
     }
 
     err = nvs_storage_get_u32(CFG_AUTO, &xRelay1State.uAutoState);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay auto value: %u\n", xRelay1State.uAutoState);
+        ESP_LOGI(TAG,"Load relay 1 auto value: %u\n", xRelay1State.uAutoState);
     } else 
     {
         xRelay1State.uAutoState=RLY_STATE_DEFAULT_VALUE;
         if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG,"Key not found");
+            ESP_LOGW(TAG,"Key not found for relay 1 auto");
         } else {
-            ESP_LOGW(TAG,"Read failed");
+            ESP_LOGW(TAG,"Read failed for relay 1 auto");
+        }
+    }
+
+    // Загрузка состояния второго реле
+    err = nvs_storage_get_u32(CFG_STATE2, &xRelay2State.uState);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG,"Load relay 2 state value: %u", xRelay2State.uState);
+    } else 
+    {
+        xRelay2State.uState=RLY_STATE_DEFAULT_VALUE;
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG,"Key not found for relay 2 state");
+        } else {
+            ESP_LOGW(TAG,"Read failed for relay 2 state");
+        }
+    }
+
+    // Загрузка состояния третьего реле (добавлено)
+    err = nvs_storage_get_u32(CFG_STATE3, &xRelay3State.uState);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG,"Load relay 3 state value: %u", xRelay3State.uState);
+    } else 
+    {
+        xRelay3State.uState=RLY_STATE_DEFAULT_VALUE;
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG,"Key not found for relay 3 state");
+        } else {
+            ESP_LOGW(TAG,"Read failed for relay 3 state");
         }
     }
 
     //set initial state
-    rly_set_output(xRelay1State.uState);
     rly_set_output_num(0,xRelay1State.uState);
     rly_set_output_num(1,xRelay2State.uState);
+    rly_set_output_num(2,xRelay3State.uState);  // Добавлено
+    
     rly_MQTT_MSG_send(TPC_RLY1, xRelay1State.uState);                
-    rly_MQTT_MSG_send(TPC_RLY2, xRelay1State.uState);                
+    rly_MQTT_MSG_send(TPC_RLY2, xRelay2State.uState);
+    rly_MQTT_MSG_send(TPC_RLY3, xRelay3State.uState);  // Добавлено
+    
     rly_Change_AutoPower(xRelay1State.uAutoState);
     ESP_LOGI(TAG,"\t[Start Main LOOP]\t...");
+    
     while (1)
     {
         //wait for PWM Msg     
@@ -566,6 +615,11 @@ void Relay_Control_Task(void *pvParameters)
                 rly_MQTT_MSG_send(TPC_RLY2, xRelay_Msg.uMsg);  
                 nvs_storage_set_u32(CFG_STATE2,xRelay_Msg.uMsg);              
                 break;
+            case RLY3_MSG_CONTROL:  // Добавлено для третьего реле
+                rly_set_output_num(2,xRelay_Msg.uMsg);
+                rly_MQTT_MSG_send(TPC_RLY3, xRelay_Msg.uMsg);  
+                nvs_storage_set_u32(CFG_STATE3,xRelay_Msg.uMsg);              
+                break;
             default:
                 ESP_LOGW(TAG, "\tUNKNOWN MESSAGE");
                 break;
@@ -577,7 +631,7 @@ void Relay_Control_Task(void *pvParameters)
 /*!
  *  @brief add msg to Relay_msg_queue
  *
- *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second
+ *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second, 2 for third
  *  @param[in] uNewState   :    Desireable relay new state
  *
  */
@@ -585,6 +639,7 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
 {
     Relay_Msg_t xRelay_Msg;
     BaseType_t xStatus;
+    
     switch (uRelayNumber)
     {
     case 0:
@@ -592,10 +647,15 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
         break;
     case 1:
         xRelay_Msg.uMsgType=RLY2_MSG_CONTROL;
-    default:
         break;
+    case 2:
+        xRelay_Msg.uMsgType=RLY3_MSG_CONTROL;  // Добавлено для третьего реле
+        break;
+    default:
+        ESP_LOGE(TAG, "\t[Relay_Change_State]\tInvalid relay number: %lu", uRelayNumber);
+        return;
     }
-    xRelay_Msg.uMsgType=RLY_MSG_CONTROL;
+    
     xRelay_Msg.uMsg=uNewState;
     xStatus = xQueueSendToBack( xRelay_Msg_Queue, &xRelay_Msg, 0 );
     QUEUE_check_rslt("Relay queue msg send", xStatus);
@@ -655,29 +715,6 @@ static void rly_MQTT_Callback1(const char *pcMessage) {
 }
 
 /*!
- *  @brief Run when MQTT client receive MSG in /Relay1 topic
- *
- *  @param[in] pcMessage         : contain data that was received
- *
- */
-static void rly_MQTT_Callback2(const char *pcMessage) {
-    uint32_t uState;
-
-    //Convert to int
-    uState=cmn_String_to_int32(pcMessage);
-    if (uState==0){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN OFF");
-        Relay_Change_State(1, RELAY_OFF_STATE);
-    } else if (uState==1){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tTURN ON");
-        Relay_Change_State(1, RELAY_ON_STATE);
-    }else{
-        ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
-    }
-    // free(pcTmp);
-}
-
-/*!
  *  @brief Run when MQTT client receive MSG in /Relay1/Auto topic
  *
  *  @param[in] pcMessage         : contain data that was received
@@ -724,7 +761,53 @@ static void rly_MQTT_auto_Callback1(const char *pcMessage) {
 }
 
 /*!
- *  @brief Run when MQTT client receive MSG in /Relay1/Auto topic
+ *  @brief Run when MQTT client receive MSG in /Relay2 topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_Callback2(const char *pcMessage) {
+    uint32_t uState;
+
+    //Convert to int
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tTURN OFF");
+        Relay_Change_State(1, RELAY_OFF_STATE);
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tTURN ON");
+        Relay_Change_State(1, RELAY_ON_STATE);
+    }else{
+        ESP_LOGW(TAG, "[MQTT RELAY2 MSG] \tOUT OF BOUNDS: %u",uState);
+    }
+}
+
+/*!
+ *  @brief Run when MQTT client receive MSG in /Relay3 topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_Callback3(const char *pcMessage) {  // Добавлена новая функция
+    uint32_t uState;
+
+    //Convert to int
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[RELAY3 MSG RCV] \tTURN OFF");
+        Relay_Change_State(2, RELAY_OFF_STATE);
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[RELAY3 MSG RCV] \tTURN ON");
+        Relay_Change_State(2, RELAY_ON_STATE);
+    }else{
+        ESP_LOGW(TAG, "[MQTT RELAY3 MSG] \tOUT OF BOUNDS: %u",uState);
+    }
+}
+
+/* Остальные функции остаются без изменений до функции rly_MQTT_auto_Callback2 */
+
+/*!
+ *  @brief Run when MQTT client receive MSG in /Relay2/Auto topic
  *
  *  @param[in] pcMessage         : contain data that was received
  *
@@ -732,12 +815,9 @@ static void rly_MQTT_auto_Callback1(const char *pcMessage) {
 static void rly_MQTT_auto_Callback2(const char *pcMessage) {
     uint32_t uState;
 
-    // pcTmp=malloc(sizeof(pcMessage));
-    // memcpy(pcTmp, pcMessage, sizeof(pcMessage));
-
     uState=cmn_String_to_int32(pcMessage);
     if (uState==0){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN OFF");
+        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tAUTO TURN OFF");
         if (xAutoPowerMutex == NULL) {
             xAutoPowerMutex = xSemaphoreCreateMutex();
             if (xAutoPowerMutex == NULL) {
@@ -749,7 +829,7 @@ static void rly_MQTT_auto_Callback2(const char *pcMessage) {
         xSemaphoreGive(xAutoPowerMutex);
         rly_Change_AutoPower(0);
     } else if (uState==1){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN ON");
+        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tAUTO TURN ON");
         if (xAutoPowerMutex == NULL) {
             xAutoPowerMutex = xSemaphoreCreateMutex();
             if (xAutoPowerMutex == NULL) {
@@ -761,9 +841,47 @@ static void rly_MQTT_auto_Callback2(const char *pcMessage) {
         xSemaphoreGive(xAutoPowerMutex);
         rly_Change_AutoPower(1);
     }else{
-        ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
+        ESP_LOGW(TAG, "[MQTT RELAY2 MSG] \tOUT OF BOUNDS: %u",uState);
     }
-    // free(pcTmp);
+}
+
+/*!
+ *  @brief Run when MQTT client receive MSG in /Relay3/Auto topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_auto_Callback3(const char *pcMessage) {  // Добавлена новая функция
+    uint32_t uState;
+
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[RELAY3 MSG RCV] \tAUTO TURN OFF");
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower&0xFB; //0b11111011
+        xSemaphoreGive(xAutoPowerMutex);
+        rly_Change_AutoPower(0);
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[RELAY3 MSG RCV] \tAUTO TURN ON");
+        if (xAutoPowerMutex == NULL) {
+            xAutoPowerMutex = xSemaphoreCreateMutex();
+            if (xAutoPowerMutex == NULL) {
+                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
+                return;
+            }
+        }
+        iAutoPower=iAutoPower|0x04;
+        xSemaphoreGive(xAutoPowerMutex);
+        rly_Change_AutoPower(1);
+    }else{
+        ESP_LOGW(TAG, "[MQTT RELAY3 MSG] \tOUT OF BOUNDS: %u",uState);
+    }
 }
 
 /*!
@@ -772,18 +890,18 @@ static void rly_MQTT_auto_Callback2(const char *pcMessage) {
  *  @param[in] cfg   : unit config structure
  *
  */
-
 void Relay_Control_Init()
 {
     ESP_LOGD(TAG,"\tRelay Config started\t");
     xRelay_Msg_Queue = xQueueCreate( 5, sizeof( Relay_Msg_t ) );
+    
     //GPIO
     gpio_config_t io_conf;
     //disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
     io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO15/16
+    //bit mask of the pins that you want to set
     io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
     //disable pull-down mode
     io_conf.pull_down_en = 0;
@@ -794,8 +912,6 @@ void Relay_Control_Init()
 
     // 1. Инициализация раздела
     esp_err_t err;
-
-    // 1. Инициализация раздела
     err = nvs_storage_init("storage");
     if (err != ESP_OK) {
         ESP_LOGW(TAG,"NVS init failed");
@@ -806,8 +922,8 @@ void Relay_Control_Init()
     mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_auto_Callback1);
     mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);
     mqtt_Topic_Subsribe(pcControlTopics[3],&rly_MQTT_auto_Callback2);
+    mqtt_Topic_Subsribe(pcControlTopics[4],&rly_MQTT_Callback3);      // Добавлено
+    mqtt_Topic_Subsribe(pcControlTopics[5],&rly_MQTT_auto_Callback3); // Добавлено
     
     xTaskCreate(Relay_Control_Task, "Relay Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
-    // xAutoTaskHndl=NULL;
-    // xTaskCreate(Relay_Auto_Control_Task, "Relay Auto Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, xAutoTaskHndl);
 };

@@ -8,6 +8,7 @@
 #define RLY_STATE_DEFAULT_VALUE RELAY_OFF_STATE;
 #define RLY_MSG_CONTROL 1
 #define RLY2_MSG_CONTROL 2
+#define RLY3_MSG_CONTROL 3  
 
 typedef struct
 {
@@ -27,7 +28,7 @@ void Relay_Control_Init();
 /*!
  *  @brief add msg to Relay_msg_queue
  *
- *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second
+ *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second, 2 for third
  *  @param[in] uNewState   :    Desireable relay new state
  *
  */

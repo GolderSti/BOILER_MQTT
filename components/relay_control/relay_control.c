@@ -22,8 +22,8 @@
 #define RELAY_OUTPUT_IO_1   4
 #define RELAY_OUTPUT_IO_2   5
 #define RELAY_OUTPUT_IO_3   3  // Добавлен пин для третьего реле
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<RELAY_OUTPUT_IO_2) | (1ULL<<RELAY_OUTPUT_IO_3))  // Обновлено
-//#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<GPIO_OUTPUT_IO_1))
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<RELAY_OUTPUT_IO_2) | (1ULL<<RELAY_OUTPUT_IO_3)) 
+#define RELAY3_ON_TIME 15*60*1000 //15 минут в миллисикундах...
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
 #define TPC_RLY1 0
@@ -74,6 +74,8 @@ static const char *CFG_STATE2="state2";
 static const char *CFG_AUTO2="auto2";
 static const char *CFG_STATE3="state3";  // Добавлено для третьего реле
 static const char *CFG_AUTO3="auto3";    // Добавлено для третьего реле
+    // Таймеры
+TimerHandle_t on_delay_timer;
 
 
 
@@ -340,6 +342,12 @@ static void stc_SunTimeCB(int iSunRise, int iSunSet)
         uiOffTime=1200;
         ESP_LOGE(TAG, "\t[stc_SunTimeCB rc_TimeMutex take]\tFAIL");
     }        
+}
+
+// Callback таймера задержки работы реле 3
+static void on_delay_timer_callback(TimerHandle_t xTimer) {
+    ESP_LOGI(TAG,"relay 3 off by timer");
+    Relay_Change_State(3, RELAY_OFF_STATE);
 }
 
 /*!
@@ -618,7 +626,8 @@ void Relay_Control_Task(void *pvParameters)
             case RLY3_MSG_CONTROL:  // Добавлено для третьего реле
                 rly_set_output_num(2,xRelay_Msg.uMsg);
                 rly_MQTT_MSG_send(TPC_RLY3, xRelay_Msg.uMsg);  
-                nvs_storage_set_u32(CFG_STATE3,xRelay_Msg.uMsg);              
+                xTimerStart(on_delay_timer,0);
+                // nvs_storage_set_u32(CFG_STATE3,xRelay_Msg.uMsg);              
                 break;
             default:
                 ESP_LOGW(TAG, "\tUNKNOWN MESSAGE");
@@ -916,6 +925,13 @@ void Relay_Control_Init()
     if (err != ESP_OK) {
         ESP_LOGW(TAG,"NVS init failed");
     }
+    on_delay_timer = xTimerCreate(
+        "on_delay",
+        pdMS_TO_TICKS(RELAY3_ON_TIME),
+        pdFALSE,
+        NULL,
+        on_delay_timer_callback
+    );
 
     mqtt_init();
     mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback1);

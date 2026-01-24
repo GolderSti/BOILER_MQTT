@@ -30,6 +30,7 @@
 #include "hlk_ld2410c.h"
 #include "relay_control.h"
 #include "btn_common.h"
+#include "sun_time_common.h"
 
 const char *TAG = "MAIN";
 
@@ -37,7 +38,7 @@ const char *TAG = "MAIN";
 #define WIFI_SSID "Sti-WiFi"
 #define WIFI_PASS "6k8wSbcN"
 #define WIFI_WAIT_BEFOR_OTA 30000 //wait for wifi befor OTA to reise an error
-#define BTN1_PIN GPIO_NUM_6
+
 // Конфигурация OTA
 static const ota_config_t ota_config = {
     .server_url = "http://esp-update.lan:8080",
@@ -48,6 +49,15 @@ static const ota_config_t ota_config = {
     .check_on_boot = true,
     .max_retries = 3,
 };
+
+//переменные для управления светом
+static int iSunRise, iSunSet;
+#define MAIN_LIGHT_RELAY 0
+#define MIRROR_LIGHT_RELAY 1
+#define FAN_RELAY 2
+static bool bLightState;
+#define MAIN_BTN_PIN GPIO_NUM_6
+#define MIRROR_BTN_PIN GPIO_NUM_7
 
 /* =========================================================
  * Общая информация о системе
@@ -170,6 +180,48 @@ static void check_and_validate_ota(bool bFW_Not_Valid)
         }
     }
 }
+
+/* =========================================================
+ * Управление освещением
+ * ========================================================= */
+
+
+ void Switch_Light_On(){
+    int now = GetLocalTime();
+    if (now<iSunSet && now > iSunRise)
+    {
+        Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_ON_STATE);
+        Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_ON_STATE);
+        ESP_LOGD(TAG,"Switch MAIN and MIRROR light ON");
+    }else
+    {
+        Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_OFF_STATE);
+        Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_ON_STATE);        
+        ESP_LOGD(TAG,"Switch only MIRROR light ON");
+    }
+    bLightState = pdTRUE;
+    
+    
+}
+
+ void Switch_Light_Off(){
+    Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_OFF_STATE);
+    Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_OFF_STATE);
+    bLightState = pdFALSE;
+    ESP_LOGD(TAG,"Switch light OFF");
+}
+
+void Switch_Light(){
+    if (bLightState==pdFALSE)
+    {
+        Switch_Light_On();
+        ESP_LOGD(TAG,"Switch light -> ON");
+    }else
+    {
+        Switch_Light_Off();
+        ESP_LOGD(TAG,"Switch light -> OFF");
+    }    
+}
 /* =========================================================
  * Датчик HLK-LD2410C
  * ========================================================= */
@@ -181,16 +233,14 @@ static void on_presence(const hlk_target_data_t *data) {
     ESP_LOGI(TAG, "Moving distance: %d cm", data->moving_distance_cm);
     ESP_LOGI(TAG, "Moving energy: %d", data->moving_energy);
     
-    // Здесь можно управлять реле, светом и т.д.
-    mqtt_Message_Publish_TAG("/espBath/LIGHT","ON",pdFALSE);
+    Switch_Light_On();
 }
 
 // Callback-функция при отсутствии
 static void on_absence(void) {
     ESP_LOGI(TAG, "No presence detected");
-    
-    // Выключение света, реле и т.д.
-    mqtt_Message_Publish_TAG("/espBath/LIGHT","OFF",pdFALSE);
+
+    Switch_Light_Off();
 }
 
 // Callback-функция изменения статуса подключения
@@ -211,7 +261,11 @@ static void on_error(const char *error) {
  * Связь реле и кнопок
  * ========================================================= */
 void main_switch_change(){
-    
+    Switch_Light();
+}
+
+void mirror_switch_change(){
+    Relay_Change_State(FAN_RELAY, RELAY_ON_STATE);
 }
 
 void button_callback(uint8_t gpio_num, uint8_t event) {
@@ -221,6 +275,15 @@ void button_callback(uint8_t gpio_num, uint8_t event) {
     
     ESP_LOGI(TAG, "GPIO %d: %s", gpio_num, 
              event < BTN_EVENT_MAX ? event_names[event] : "UNKNOWN");
+
+    if (gpio_num==MAIN_BTN_PIN && (event == BTN_EVENT_PRESSED || event == BTN_EVENT_RELEASED))
+    {
+        main_switch_change();
+    }
+    if (gpio_num==MIRROR_BTN_PIN && (event == BTN_EVENT_PRESSED || event == BTN_EVENT_RELEASED))
+    {
+        mirror_switch_change();
+    }    
 }
 
 void app_main(void)
@@ -336,17 +399,20 @@ void app_main(void)
     //
     ESP_LOGI(TAG,"Starting Relay Module");
     Relay_Control_Init();
+    bLightState = pdFALSE;
+    Switch_Light_Off();
+
     ESP_LOGI(TAG,"Starting Buttons");
     // Инициализация модуля кнопок
     button_init();
-    
+    sun_time_init(NULL);
+    stc_sync_wait(pdMS_TO_TICKS(120000));
+    iSunSet=stc_GetSunsetTime();
+    iSunRise=stc_GetSunriseTime();
     // Регистрация кнопки с настройками по умолчанию
     button_config_t default_cfg = BUTTON_CONFIG_DEFAULT();
-    default_cfg.active_low=true;
-    default_cfg.debounce_ms =50;
-    default_cfg.long_press_ms = 1000;
-    default_cfg.double_click_ms = 400;
-    button_register(BTN1_PIN, &default_cfg, button_callback);
+    button_register(MAIN_BTN_PIN, &default_cfg, button_callback);
+    button_register(MIRROR_BTN_PIN, &default_cfg, button_callback);
     //Подключились к серверу и проверили наличие прошивки там. Если связи с сервером нет, а мы только что обновились - значит что-то не так с кодом -> откатимся на старую прошивку
     ESP_LOGI(TAG,"Validating OTA");
     check_and_validate_ota(bOTA_Firmware_not_valid); 

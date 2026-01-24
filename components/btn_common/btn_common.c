@@ -172,7 +172,7 @@ static void button_task(void* arg) {
                             btn->callback(btn->gpio_num, BTN_EVENT_LONG_PRESS);
                         }
                         // После долгого нажатия сбрасываем состояние двойного клика
-                        reset_button_state(btn);
+                        // reset_button_state(btn);
                     }
                     break;
             }

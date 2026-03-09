@@ -346,8 +346,8 @@ static void stc_SunTimeCB(int iSunRise, int iSunSet)
 
 // Callback таймера задержки работы реле 3
 static void on_delay_timer_callback(TimerHandle_t xTimer) {
-    ESP_LOGI(TAG,"relay 3 off by timer");
-    Relay_Change_State(3, RELAY_OFF_STATE);
+    // ESP_LOGI(TAG,"relay 3 off by timer");
+    Relay_Change_State(2, RELAY_OFF_STATE);
 }
 
 /*!
@@ -626,7 +626,11 @@ void Relay_Control_Task(void *pvParameters)
             case RLY3_MSG_CONTROL:  // Добавлено для третьего реле
                 rly_set_output_num(2,xRelay_Msg.uMsg);
                 rly_MQTT_MSG_send(TPC_RLY3, xRelay_Msg.uMsg);  
-                xTimerStart(on_delay_timer,0);
+                if (xRelay_Msg.uMsg == RELAY_ON_STATE) {
+                    xTimerStart(on_delay_timer,0);
+                } else {
+                    xTimerStop(on_delay_timer, 0);
+                }
                 // nvs_storage_set_u32(CFG_STATE3,xRelay_Msg.uMsg);              
                 break;
             default:
@@ -667,7 +671,7 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
     
     xRelay_Msg.uMsg=uNewState;
     xStatus = xQueueSendToBack( xRelay_Msg_Queue, &xRelay_Msg, 0 );
-    QUEUE_check_rslt("Relay queue msg send", xStatus);
+    // QUEUE_check_rslt("Relay queue msg send", xStatus);
 };
 
 /*!

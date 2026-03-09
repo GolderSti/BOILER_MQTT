@@ -8,21 +8,17 @@
 #include <sys/stat.h>
 #include "esp_system.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "relay_control.h"
+#include "relay_io.h"
 #include "mqtt_common.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
 #include "sun_time_common.h"
 
-#define RELAY_OUTPUT_IO_1   4
-#define RELAY_OUTPUT_IO_2   5
-#define RELAY_OUTPUT_IO_3   6  // Добавлен пин для третьего реле
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<RELAY_OUTPUT_IO_2) | (1ULL<<RELAY_OUTPUT_IO_3)) 
 #define RELAY3_ON_TIME 15*60*1000 //15 минут в миллисикундах...
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
@@ -32,12 +28,6 @@ static const char *TAG = "RLYCNTR";
 #define TPC_RLY2_AUTO 3
 #define TPC_RLY3 4           // Добавлено для третьего реле
 #define TPC_RLY3_AUTO 5      // Добавлено для третьего реле
-static const gpio_num_t rly_pins[] = {
-                                    RELAY_OUTPUT_IO_1,
-                                    RELAY_OUTPUT_IO_2,
-                                    RELAY_OUTPUT_IO_3,  // Добавлено
-                                    };
-
 static const char *pcTopics[] = {                    
                                 [TPC_RLY1]="/Relay1",
                                 [TPC_RLY1_AUTO]="/Relay1/Auto",
@@ -303,23 +293,17 @@ esp_err_t nvs_storage_deinit(const char *partition_name) {
  */
 static void rly_set_output_num(uint32_t uRelayNumber, uint32_t uRelayNewState)
 {
-    if (uRelayNumber >= sizeof(rly_pins)/sizeof(rly_pins[0])) {
-        ESP_LOGE(TAG, "\t[RELAY_SET]\tInvalid relay number: %lu", uRelayNumber);
+    esp_err_t err = Relay_IO_Set(uRelayNumber, uRelayNewState);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "\t[RELAY%lu_SET]\tFailed", uRelayNumber + 1);
         return;
     }
-    
-    if (uRelayNewState)
-    {
-        //Relay on
-        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tON\t,%i", uRelayNumber+1, RELAY_ON_STATE);
-        gpio_set_level(rly_pins[uRelayNumber], RELAY_ON_STATE);
-    }
-    else
-    {
-        //relay off
-        ESP_LOGI(TAG, "\t[RELAY%lu_SET]\tOFF\t,%i", uRelayNumber+1, RELAY_OFF_STATE);
-        gpio_set_level(rly_pins[uRelayNumber], RELAY_OFF_STATE);
-    }
+
+    ESP_LOGI(TAG,
+             "\t[RELAY%lu_SET]\t%s\t,%lu",
+             uRelayNumber + 1,
+             Relay_IO_GetState(uRelayNumber) == RELAY_ON_STATE ? "ON" : "OFF",
+             Relay_IO_GetState(uRelayNumber));
 }
 
 /*!
@@ -908,20 +892,10 @@ void Relay_Control_Init()
     ESP_LOGD(TAG,"\tRelay Config started\t");
     xRelay_Msg_Queue = xQueueCreate( 5, sizeof( Relay_Msg_t ) );
     
-    //GPIO
-    gpio_config_t io_conf;
-    //disable interrupt
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
+    if (Relay_IO_Init() != ESP_OK) {
+        ESP_LOGE(TAG, "Relay GPIO init failed");
+        return;
+    }
 
     // 1. Инициализация раздела
     esp_err_t err;

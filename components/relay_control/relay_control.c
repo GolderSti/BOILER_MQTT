@@ -21,7 +21,7 @@
 
 #define RELAY_OUTPUT_IO_1   4
 #define RELAY_OUTPUT_IO_2   5
-#define RELAY_OUTPUT_IO_3   3  // Добавлен пин для третьего реле
+#define RELAY_OUTPUT_IO_3   6  // Добавлен пин для третьего реле
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<RELAY_OUTPUT_IO_1) | (1ULL<<RELAY_OUTPUT_IO_2) | (1ULL<<RELAY_OUTPUT_IO_3)) 
 #define RELAY3_ON_TIME 15*60*1000 //15 минут в миллисикундах...
 static const char *TAG = "RLYCNTR";

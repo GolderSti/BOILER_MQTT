@@ -56,8 +56,8 @@ static int iSunRise, iSunSet;
 #define MIRROR_LIGHT_RELAY 1
 #define FAN_RELAY 2
 static bool bLightState;
-#define MAIN_BTN_PIN GPIO_NUM_6
-#define MIRROR_BTN_PIN GPIO_NUM_7
+#define MAIN_BTN_PIN GPIO_NUM_1
+#define MIRROR_BTN_PIN GPIO_NUM_2
 
 /* =========================================================
  * Общая информация о системе

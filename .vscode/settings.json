@@ -17,5 +17,6 @@
     "--compile-commands-dir=/home/goldersti/esp32proj/0MAIN/build"
   ],
   "C_Cpp.default.compilerPath": "/home/goldersti/esp32/xtensa-lx106-elf/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
-  "idf.currentSetup": "/home/goldersti/esp32/v5.5.2/esp-idf"
+  "idf.currentSetup": "/home/goldersti/esp32/v5.5.2/esp-idf",
+  "idf.flashType": "UART"
 }

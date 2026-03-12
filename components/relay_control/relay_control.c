@@ -157,7 +157,6 @@ static void stc_SunTimeCB(int iSunRise, int iSunSet)
 // Callback таймера задержки работы реле 3
 static void on_fan_auto_off_timer_callback(TimerHandle_t xTimer)
 {
-    (void)xTimer;
     Relay_Change_State(2, RELAY_OFF_STATE);
 }
 
@@ -492,18 +491,11 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
 
 void Relay_Fan_Off(void)
 {
-    if (s_fan_auto_off_timer != NULL) {
-        xTimerStop(s_fan_auto_off_timer, 0);
-    }
     Relay_Change_State(2, RELAY_OFF_STATE);
 }
 
 void Relay_Fan_On(void)
 {
-    if (s_fan_auto_off_timer != NULL) {
-        xTimerStop(s_fan_auto_off_timer, 0);
-        xTimerStart(s_fan_auto_off_timer, 0);
-    }
     Relay_Change_State(2, RELAY_ON_STATE);
 }
 

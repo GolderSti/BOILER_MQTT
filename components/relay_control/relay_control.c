@@ -20,7 +20,8 @@
 #include "esp_sntp.h"
 #include "sun_time_common.h"
 
-#define RELAY3_ON_TIME 15*60*1000 //15 минут в миллисикундах...
+#define FAN_AUTO_OFF_DELAY_MS (15U * 60U * 1000U) // 15 минут в миллисекундах
+#define FAN_AUTO_OFF_TIMER_NAME "fan_auto_off"
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
 #define TPC_RLY1 0
@@ -60,10 +61,7 @@ static const char *CFG_STATE="state";
 static const char *CFG_AUTO="auto";
 static const char *CFG_STATE2="state2";
 static const char *CFG_AUTO2="auto2";
-    // Таймеры
-TimerHandle_t on_delay_timer;
-
-
+static TimerHandle_t s_fan_auto_off_timer = NULL;
 
 /*!
  * Expand Queue rslt to string
@@ -157,9 +155,32 @@ static void stc_SunTimeCB(int iSunRise, int iSunSet)
 }
 
 // Callback таймера задержки работы реле 3
-static void on_delay_timer_callback(TimerHandle_t xTimer) {
-    // ESP_LOGI(TAG,"relay 3 off by timer");
+static void on_fan_auto_off_timer_callback(TimerHandle_t xTimer)
+{
+    (void)xTimer;
     Relay_Change_State(2, RELAY_OFF_STATE);
+}
+
+static esp_err_t fan_auto_off_timer_init(void)
+{
+    if (s_fan_auto_off_timer != NULL) {
+        return ESP_OK;
+    }
+
+    s_fan_auto_off_timer = xTimerCreate(
+        FAN_AUTO_OFF_TIMER_NAME,
+        pdMS_TO_TICKS(FAN_AUTO_OFF_DELAY_MS),
+        pdFALSE,
+        NULL,
+        on_fan_auto_off_timer_callback
+    );
+
+    if (s_fan_auto_off_timer == NULL) {
+        ESP_LOGE(TAG, "Failed to create fan auto-off timer");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
 }
 
 /*!
@@ -419,10 +440,12 @@ void Relay_Control_Task(void *pvParameters)
             case RLY3_MSG_CONTROL:  // Добавлено для третьего реле
                 rly_set_output_num(2,xRelay_Msg.uMsg);
                 rly_MQTT_MSG_send(TPC_FAN, xRelay_Msg.uMsg);  
-                if (xRelay_Msg.uMsg == RELAY_ON_STATE) {
-                    xTimerStart(on_delay_timer,0);
-                } else {
-                    xTimerStop(on_delay_timer, 0);
+                if (s_fan_auto_off_timer != NULL) {
+                    if (xRelay_Msg.uMsg == RELAY_ON_STATE) {
+                        xTimerStart(s_fan_auto_off_timer, 0);
+                    } else {
+                        xTimerStop(s_fan_auto_off_timer, 0);
+                    }
                 }
                 break;
             default:
@@ -469,11 +492,18 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
 
 void Relay_Fan_Off(void)
 {
+    if (s_fan_auto_off_timer != NULL) {
+        xTimerStop(s_fan_auto_off_timer, 0);
+    }
     Relay_Change_State(2, RELAY_OFF_STATE);
 }
 
 void Relay_Fan_On(void)
 {
+    if (s_fan_auto_off_timer != NULL) {
+        xTimerStop(s_fan_auto_off_timer, 0);
+        xTimerStart(s_fan_auto_off_timer, 0);
+    }
     Relay_Change_State(2, RELAY_ON_STATE);
 }
 
@@ -611,10 +641,10 @@ static void rly_MQTT_Callback3(const char *pcMessage) {  // Добавлена �
     uState=cmn_String_to_int32(pcMessage);
     if (uState==0){
         ESP_LOGI(TAG,"\t[FAN MSG RCV] \tTURN OFF");
-        Relay_Change_State(2, RELAY_OFF_STATE);
+        Relay_Fan_Off();
     } else if (uState==1){
         ESP_LOGI(TAG,"\t[FAN MSG RCV] \tTURN ON");
-        Relay_Change_State(2, RELAY_ON_STATE);
+        Relay_Fan_On();
     }else{
         ESP_LOGW(TAG, "[MQTT FAN MSG] \tOUT OF BOUNDS: %u",uState);
     }
@@ -683,13 +713,9 @@ void Relay_Control_Init()
     if (err != ESP_OK) {
         ESP_LOGW(TAG,"NVS init failed");
     }
-    on_delay_timer = xTimerCreate(
-        "on_delay",
-        pdMS_TO_TICKS(RELAY3_ON_TIME),
-        pdFALSE,
-        NULL,
-        on_delay_timer_callback
-    );
+    if (fan_auto_off_timer_init() != ESP_OK) {
+        return;
+    }
 
     mqtt_init();
     mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback1);

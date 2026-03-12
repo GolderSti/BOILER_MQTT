@@ -10,7 +10,8 @@
    Unless required by applicable law or agreed to in writing, this
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
-   dirty commit version
+   dirty commit version + dirty
+   try new v1.3.1-1-g44b9d77-dirty
 */
 #include <stdio.h>
 #include <string.h>

@@ -1,3 +1,7 @@
+#pragma once
+
+#include <stdint.h>
+
 // #include "freertos/FreeRTOS.h"
 // #include "freertos/task.h"
 // #include "freertos/semphr.h"
@@ -5,10 +9,10 @@
 
 #define RELAY_ON_STATE 1
 #define RELAY_OFF_STATE 0
-#define RLY_STATE_DEFAULT_VALUE RELAY_OFF_STATE;
+#define RLY_STATE_DEFAULT_VALUE RELAY_OFF_STATE
 #define RLY_MSG_CONTROL 1
 #define RLY2_MSG_CONTROL 2
-#define RLY3_MSG_CONTROL 3  
+#define RLY3_MSG_CONTROL 3
 
 typedef struct
 {
@@ -33,3 +37,6 @@ void Relay_Control_Init();
  *
  */
 void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState);
+
+void Relay_Fan_Off(void);
+void Relay_Fan_On(void);

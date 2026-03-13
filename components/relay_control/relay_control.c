@@ -14,7 +14,6 @@
 #include "freertos/queue.h"
 #include "relay_control.h"
 #include "relay_io.h"
-#include "relay_storage.h"
 #include "mqtt_common.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
@@ -24,32 +23,28 @@
 #define FAN_AUTO_OFF_TIMER_NAME "fan_auto_off"
 static const char *TAG = "RLYCNTR";
 #define MAX_MESSAGE_LENGTH 50
-#define TPC_RLY1 0
-#define TPC_RLY1_AUTO 1
-#define TPC_RLY2 2
-#define TPC_RLY2_AUTO 3
-#define TPC_FAN 4
+#define TPC_LIGHT 0
+#define TPC_MAIN_LIGHT 1
+#define TPC_MIRROR_LIGHT 2
+#define TPC_FAN 3
 static const char *pcTopics[] = {                    
-                                [TPC_RLY1]="/Relay1",
-                                [TPC_RLY1_AUTO]="/Relay1/Auto",
-                                [TPC_RLY2]="/Relay2",
-                                [TPC_RLY2_AUTO]="/Relay2/Auto",
+                                [TPC_LIGHT]="/Light",
+                                [TPC_MAIN_LIGHT]="/MainLight",
+                                [TPC_MIRROR_LIGHT]="/MirrorLight",
                                 [TPC_FAN]="/Fan",
                                 };
 
 #define CONTROL_TOPICS_COUNT 5
 static const char *pcControlTopics[] = {
-                                        "/Relay1/Set",       //0
-                                        "/Relay1/Auto/Set",  //1
-                                        "/Relay2/Set",       //2
-                                        "/Relay2/Auto/Set",  //3
-                                        "/Fan/Set",          //4
+                                        "/Light/Set",       //0
+                                        "/MainLight/Set",   //1
+                                        "/MirrorLight/Set", //2
+                                        "/Fan/Set",         //3
                                         };
 
 typedef struct 
 {
     uint32_t uState;
-    uint32_t uAutoState;
 } RelayState_t;
 
 static QueueHandle_t xRelay_Msg_Queue;
@@ -57,11 +52,8 @@ static int32_t uiOnTime=480, uiOffTime=1200;
 static SemaphoreHandle_t xAutoPowerMutex;
 static int8_t iAutoPower; 
 static SemaphoreHandle_t rc_TimeMutex;
-static const char *CFG_STATE="state";
-static const char *CFG_AUTO="auto";
-static const char *CFG_STATE2="state2";
-static const char *CFG_AUTO2="auto2";
 static TimerHandle_t s_fan_auto_off_timer = NULL;
+static enum Light_States LightState;
 
 /*!
  * Expand Queue rslt to string
@@ -132,34 +124,12 @@ static void rly_set_output_num(uint32_t uRelayNumber, uint32_t uRelayNewState)
              Relay_IO_GetState(uRelayNumber));
 }
 
-/*!
- *  @brief Callback fires when system time updated via SNTP.
- *
- *  @param[out] iSunRise   : SunRise time in minutes
- *  @param[out] iSunSet    : SunSet time in minutes
- *
- */
-static void stc_SunTimeCB(int iSunRise, int iSunSet)
-{
-    if (xSemaphoreTake( rc_TimeMutex, pdMS_TO_TICKS(1900) )){
-        uiOnTime=iSunSet;
-        uiOffTime=iSunRise;
-        xSemaphoreGive( rc_TimeMutex );
-    }
-    else
-    {
-        uiOnTime=480;
-        uiOffTime=1200;
-        ESP_LOGE(TAG, "\t[stc_SunTimeCB rc_TimeMutex take]\tFAIL");
-    }        
-}
-
-// Callback таймера задержки работы реле 3
+// Callback таймера задержки работы реле вентилятора
 static void on_fan_auto_off_timer_callback(TimerHandle_t xTimer)
 {
     Relay_Change_State(2, RELAY_OFF_STATE);
 }
-
+//Вспомагательная функция инициализации таймера задержки работы вентилятора
 static esp_err_t fan_auto_off_timer_init(void)
 {
     if (s_fan_auto_off_timer != NULL) {
@@ -182,160 +152,6 @@ static esp_err_t fan_auto_off_timer_init(void)
     return ESP_OK;
 }
 
-/*!
- *  @brief Relay auto control task. Check On and Off time every 30 seconds.
- *
- *  @param[in] pvParameters   : doesn't use
- *
- */
-void Relay_Auto_Control_Task(void *pvParameters)
-{
-    static const char *TAG = "RLYAUTO";
-    int32_t iCurTime;
-    static int32_t iFiredOff = 0;    //for off run once
-    static int32_t iFiredOn = 0;    //for on run once
-
-    ESP_LOGI(TAG,"\tRelay_Auto_Control_task \t START");
-    ESP_LOGD(TAG, "\t[Free memory]:\t%d bytes", esp_get_free_heap_size());
-    //SNTP sync time
-    rc_TimeMutex = xSemaphoreCreateMutex();
-    sun_time_init(&stc_SunTimeCB);
-    //wait for sync    
-    if (stc_sync_wait(portMAX_DELAY) != ESP_OK) {
-        ESP_LOGE(TAG,"\t[SNTP]    \tTIMEOUT ERROR");
-        vTaskDelete(NULL);
-    }    
-    for(;;)
-    {//check on and off every 30 seconds
-        int32_t iloc_OnTime, iloc_OffTime;
-        if (xSemaphoreTake( rc_TimeMutex, pdMS_TO_TICKS(1900) )){
-            iloc_OnTime=uiOnTime;
-            iloc_OffTime=uiOffTime;
-            xSemaphoreGive( rc_TimeMutex );
-        }
-        else
-        {
-            iloc_OnTime=480;
-            iloc_OffTime=1200;
-            ESP_LOGE(TAG, "\t[Relay_Auto_Control_Task rc_TimeMutex take]\tFAIL");
-        }        
-
-        iCurTime = GetLocalTime();
-        ESP_LOGD(TAG,"\t[Auto_CNTRL] \tTIMEOUT\ttm:%i;off:%u;on:%u",iCurTime,iloc_OffTime,iloc_OnTime);
-        //check off time
-        if ((iCurTime==iloc_OffTime)&&(iFiredOff==0))
-        {
-                ESP_LOGI(TAG,"\t[Auto_turn]\tOFF");
-                iFiredOff=1;
-                int8_t ilocAutoPower;
-                if (xAutoPowerMutex == NULL) {
-                    xAutoPowerMutex = xSemaphoreCreateMutex();
-                    if (xAutoPowerMutex == NULL) {
-                        ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                        return;
-                    }
-                }
-                
-                ilocAutoPower = iAutoPower;
-                xSemaphoreGive(xAutoPowerMutex);
-
-                if ((ilocAutoPower&0x01)==0x01){
-                    Relay_Change_State(0,RELAY_OFF_STATE);
-                }
-                if ((ilocAutoPower&0x02)==0x02){
-                    Relay_Change_State(1,RELAY_OFF_STATE);
-                }
-        }//check on time 
-        else if ((iCurTime==iloc_OnTime)&&(iFiredOn==0))
-        {
-                ESP_LOGI(TAG,"\t[Auto_turn]\tON");
-                iFiredOn=1;
-                int8_t ilocAutoPower;
-                if (xAutoPowerMutex == NULL) {
-                    xAutoPowerMutex = xSemaphoreCreateMutex();
-                    if (xAutoPowerMutex == NULL) {
-                        ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                        return;
-                    }
-                }
-                
-                ilocAutoPower = iAutoPower;
-                xSemaphoreGive(xAutoPowerMutex);
-                if ((ilocAutoPower&0x01)==0x01){
-                    Relay_Change_State(0,RELAY_ON_STATE);
-                }
-                if ((ilocAutoPower&0x02)==0x02){
-                    Relay_Change_State(1,RELAY_ON_STATE);
-                }
-        } 
-        //reset one fire flag
-        if ((iFiredOff!=0)&&(iCurTime!=iloc_OffTime))
-        {
-            iFiredOff=0;
-        }
-        //reset one fire flag
-        if ((iFiredOn!=0)&&(iCurTime!=iloc_OnTime))
-        {
-            iFiredOn=0;
-        }
-        ESP_LOGD(TAG,"\t[iFired OFF/ON]\t%i / %i", iFiredOff, iFiredOn);
-        vTaskDelay(pdMS_TO_TICKS(30000));
-    }
-}
-
-/*!
- *  @brief Set auto ON/OFF state
- *
- *  @param[in] uRelayNewState   : new Relay state
- *
- */
-void rly_Change_AutoPower(uint32_t uNewState)
-{
-    static TaskHandle_t xAutoTaskHndl=NULL;
-
-    ESP_LOGI(TAG,"\t[Set Auto State init]\t%u", uNewState);
-    if (uNewState)
-    {
-        if (xAutoTaskHndl==NULL)
-        {        
-            ESP_LOGD(TAG,"\t[Auto Task Create]");
-            if (xTaskCreate(Relay_Auto_Control_Task, "Relay Auto Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, &xAutoTaskHndl)==pdFAIL)
-            {
-                ESP_LOGE(TAG,"\t[xTaskCreate]\tFAIL - Relay Auto Control Task");
-                xAutoTaskHndl=NULL;
-            }else{
-                ESP_LOGD(TAG,"\t[Auto Task Create]\tOK");
-            }
-        }else{
-            ESP_LOGD(TAG,"\t[Task already exist]");
-        }
-    }
-    else
-    {
-        if (xAutoTaskHndl!=NULL)
-        {
-            ESP_LOGI(TAG,"\t[Auto Task Delete]");
-            vTaskDelete(xAutoTaskHndl);
-            xAutoTaskHndl=NULL;
-        }else{
-            ESP_LOGD(TAG,"\t[Task doesn't exist]");
-        }
-    }
-
-    if (xAutoTaskHndl==NULL)
-    {
-        rly_MQTT_MSG_send(TPC_RLY1_AUTO, 0);
-        relay_storage_set_u32(CFG_AUTO,0);
-        relay_storage_set_u32(CFG_AUTO2,0);
-    }else
-    {
-        rly_MQTT_MSG_send(TPC_RLY1_AUTO, 1);
-        relay_storage_set_u32(CFG_AUTO,1);
-        relay_storage_set_u32(CFG_AUTO2,1);
-    }
-    
-    
-}
 
 /*!
  *  @brief Relay control task. Wait message and change relay state
@@ -349,72 +165,26 @@ void Relay_Control_Task(void *pvParameters)
     static RelayState_t xRelay1State,xRelay2State,xRelay3State;  // Добавлено для третьего реле
     Relay_Msg_t xRelay_Msg;
     esp_err_t err;
+    static uint32_t uLightState = 0; // 00 - all off, 01 - mirror, 10 - main, 11 - all on
 
     ESP_LOGI(TAG,"\tRElay_Control_task \t START");
     ESP_LOGD(TAG, "\t[Free memory]:\t%d bytes", esp_get_free_heap_size());
     
     // Инициализация состояний реле
-    xRelay1State.uState=RELAY_OFF_STATE;
-    xRelay1State.uAutoState=0;
-    xRelay2State.uState=RELAY_OFF_STATE;
-    xRelay2State.uAutoState=0;
+    xRelay1State.uState=RLY_STATE_DEFAULT_VALUE;
+    xRelay2State.uState=RLY_STATE_DEFAULT_VALUE;
+    LightState=ALL_OFF;
+    uLightState = 0;
     xRelay3State.uState=RELAY_OFF_STATE;
-    xRelay3State.uAutoState=0;
-    
-    // Загрузка состояния первого реле
-    err = relay_storage_get_u32(CFG_STATE, &xRelay1State.uState);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay 1 state value: %u", xRelay1State.uState);
-    } else 
-    {
-        xRelay1State.uState=RLY_STATE_DEFAULT_VALUE;
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG,"Key not found for relay 1 state");
-        } else {
-            ESP_LOGW(TAG,"Read failed for relay 1 state");
-        }
-    }
-
-    err = relay_storage_get_u32(CFG_AUTO, &xRelay1State.uAutoState);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay 1 auto value: %u\n", xRelay1State.uAutoState);
-    } else 
-    {
-        xRelay1State.uAutoState=RLY_STATE_DEFAULT_VALUE;
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG,"Key not found for relay 1 auto");
-        } else {
-            ESP_LOGW(TAG,"Read failed for relay 1 auto");
-        }
-    }
-
-    // Загрузка состояния второго реле
-    err = relay_storage_get_u32(CFG_STATE2, &xRelay2State.uState);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG,"Load relay 2 state value: %u", xRelay2State.uState);
-    } else 
-    {
-        xRelay2State.uState=RLY_STATE_DEFAULT_VALUE;
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG,"Key not found for relay 2 state");
-        } else {
-            ESP_LOGW(TAG,"Read failed for relay 2 state");
-        }
-    }
-
-    // Состояние вентилятора всегда стартует выключенным.
-    xRelay3State.uState = RELAY_OFF_STATE;
 
     //set initial state
     rly_set_output_num(0,xRelay1State.uState);
+    rly_MQTT_MSG_send(TPC_MAIN_LIGHT, xRelay1State.uState);
     rly_set_output_num(1,xRelay2State.uState);
-    rly_set_output_num(2,xRelay3State.uState);  // Добавлено
-    
-    rly_MQTT_MSG_send(TPC_RLY1, xRelay1State.uState);                
-    rly_MQTT_MSG_send(TPC_RLY2, xRelay2State.uState);
+    rly_MQTT_MSG_send(TPC_MIRROR_LIGHT, xRelay2State.uState);
+    rly_set_output_num(2,xRelay3State.uState);  
     rly_MQTT_MSG_send(TPC_FAN, xRelay3State.uState);
     
-    rly_Change_AutoPower(xRelay1State.uAutoState);
     ESP_LOGI(TAG,"\t[Start Main LOOP]\t...");
     
     while (1)
@@ -426,17 +196,31 @@ void Relay_Control_Task(void *pvParameters)
             ESP_LOGD(TAG, "\t[Free memory]:\t%d bytes", esp_get_free_heap_size());
             switch (xRelay_Msg.uMsgType)
             {
-            case RLY_MSG_CONTROL:
+            case RLY_MAIN_CONTROL:
                 rly_set_output_num(0,xRelay_Msg.uMsg);
-                rly_MQTT_MSG_send(TPC_RLY1, xRelay_Msg.uMsg);  
-                relay_storage_set_u32(CFG_STATE,xRelay_Msg.uMsg);              
+                if (xRelay_Msg.uMsg)
+                {
+                    uLightState |= 2; //0b10
+                }else
+                {
+                    uLightState &= 1; //0b01
+                }
+                LightState_Change(uLightState);
+                rly_MQTT_MSG_send(TPC_MAIN_LIGHT, xRelay_Msg.uMsg);  
                 break;
-            case RLY2_MSG_CONTROL:
+            case RLY_MIRROR_CONTROL:
                 rly_set_output_num(1,xRelay_Msg.uMsg);
-                rly_MQTT_MSG_send(TPC_RLY2, xRelay_Msg.uMsg);  
-                relay_storage_set_u32(CFG_STATE2,xRelay_Msg.uMsg);              
+                if (xRelay_Msg.uMsg)
+                {
+                    uLightState |= 1; //0b01
+                }else
+                {
+                    uLightState &= 2; //0b10
+                }
+                LightState_Change(uLightState);
+                rly_MQTT_MSG_send(TPC_MIRROR_LIGHT, xRelay_Msg.uMsg);  
                 break;
-            case RLY3_MSG_CONTROL:  // Добавлено для третьего реле
+            case RLY_FAN_CONTROL:  // Добавлено для третьего реле
                 rly_set_output_num(2,xRelay_Msg.uMsg);
                 rly_MQTT_MSG_send(TPC_FAN, xRelay_Msg.uMsg);  
                 if (s_fan_auto_off_timer != NULL) {
@@ -452,7 +236,42 @@ void Relay_Control_Task(void *pvParameters)
                 break;
             }
         }
-    }            
+    }
+}
+
+/*!
+ *  @brief convert uLightState to LightState
+ *
+ *  @param[in] uiLState:    uiLightState
+ *
+ */
+void LightState_Change(uint32_t uiLState)
+{
+    switch (uiLState)
+    {
+    case 00:
+        LightState = ALL_OFF;
+        ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
+        rly_MQTT_MSG_send(TPC_LIGHT, 0);
+        break;
+    case 01:
+        LightState = MAIN_ON;
+        ESP_LOGD(TAG, "\tLightState:\tMAIN_ON");
+        break;
+    case 10:
+        LightState = MIRROR_ON;
+        ESP_LOGD(TAG, "\tLightState:\tMIRROR_ON");
+        break;
+    case 11:
+        LightState = ALL_ON;
+        ESP_LOGD(TAG, "\tLightState:\tALL_ON");
+        rly_MQTT_MSG_send(TPC_LIGHT, 1);
+        break;
+
+    default:
+        ESP_LOGE(TAG, "\tLight State out of bounds!");
+        break;
+    }
 };
 
 /*!
@@ -470,13 +289,13 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
     switch (uRelayNumber)
     {
     case 0:
-        xRelay_Msg.uMsgType=RLY_MSG_CONTROL;
+        xRelay_Msg.uMsgType=RLY_MAIN_CONTROL;
         break;
     case 1:
-        xRelay_Msg.uMsgType=RLY2_MSG_CONTROL;
+        xRelay_Msg.uMsgType=RLY_MIRROR_CONTROL;
         break;
     case 2:
-        xRelay_Msg.uMsgType=RLY3_MSG_CONTROL;  // Добавлено для третьего реле
+        xRelay_Msg.uMsgType=RLY_FAN_CONTROL;  // Добавлено для третьего реле
         break;
     default:
         ESP_LOGE(TAG, "\t[Relay_Change_State]\tInvalid relay number: %lu", uRelayNumber);
@@ -553,52 +372,6 @@ static void rly_MQTT_Callback1(const char *pcMessage) {
 }
 
 /*!
- *  @brief Run when MQTT client receive MSG in /Relay1/Auto topic
- *
- *  @param[in] pcMessage         : contain data that was received
- *
- */
-static void rly_MQTT_auto_Callback1(const char *pcMessage) {
-    uint32_t uState;
-
-    // pcTmp=malloc(sizeof(pcMessage));
-    // memcpy(pcTmp, pcMessage, sizeof(pcMessage));
-    
-
-    uState=cmn_String_to_int32(pcMessage);
-    if (uState==0){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN OFF");
-    
-        if (xAutoPowerMutex == NULL) {
-            xAutoPowerMutex = xSemaphoreCreateMutex();
-            if (xAutoPowerMutex == NULL) {
-                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                return;
-            }
-        }
-        iAutoPower=iAutoPower&0xFE;
-        xSemaphoreGive(xAutoPowerMutex);
-    
-        rly_Change_AutoPower(0);
-    } else if (uState==1){
-        ESP_LOGI(TAG,"\t[RELAY MSG RCV] \tAUTO TURN ON");
-        if (xAutoPowerMutex == NULL) {
-            xAutoPowerMutex = xSemaphoreCreateMutex();
-            if (xAutoPowerMutex == NULL) {
-                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                return;
-            }
-        }
-        iAutoPower=iAutoPower|0x01;
-        xSemaphoreGive(xAutoPowerMutex);
-        rly_Change_AutoPower(1);
-    }else{
-        ESP_LOGW(TAG, "[MQTT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
-    }
-    // free(pcTmp);
-}
-
-/*!
  *  @brief Run when MQTT client receive MSG in /Relay2 topic
  *
  *  @param[in] pcMessage         : contain data that was received
@@ -642,47 +415,6 @@ static void rly_MQTT_Callback3(const char *pcMessage) {  // Добавлена �
     }
 }
 
-/* Остальные функции остаются без изменений до функции rly_MQTT_auto_Callback2 */
-
-/*!
- *  @brief Run when MQTT client receive MSG in /Relay2/Auto topic
- *
- *  @param[in] pcMessage         : contain data that was received
- *
- */
-static void rly_MQTT_auto_Callback2(const char *pcMessage) {
-    uint32_t uState;
-
-    uState=cmn_String_to_int32(pcMessage);
-    if (uState==0){
-        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tAUTO TURN OFF");
-        if (xAutoPowerMutex == NULL) {
-            xAutoPowerMutex = xSemaphoreCreateMutex();
-            if (xAutoPowerMutex == NULL) {
-                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                return;
-            }
-        }
-        iAutoPower=iAutoPower&0xFD; //0b11111101
-        xSemaphoreGive(xAutoPowerMutex);
-        rly_Change_AutoPower(0);
-    } else if (uState==1){
-        ESP_LOGI(TAG,"\t[RELAY2 MSG RCV] \tAUTO TURN ON");
-        if (xAutoPowerMutex == NULL) {
-            xAutoPowerMutex = xSemaphoreCreateMutex();
-            if (xAutoPowerMutex == NULL) {
-                ESP_LOGE(TAG, "\tFailed to create mutex for subscribed topics");
-                return;
-            }
-        }
-        iAutoPower=iAutoPower|0x02;
-        xSemaphoreGive(xAutoPowerMutex);
-        rly_Change_AutoPower(1);
-    }else{
-        ESP_LOGW(TAG, "[MQTT RELAY2 MSG] \tOUT OF BOUNDS: %u",uState);
-    }
-}
-
 /*!
  *  @brief Init relay_control unit and start Relay_Control Task
  *
@@ -699,22 +431,10 @@ void Relay_Control_Init()
         return;
     }
 
-    // 1. Инициализация раздела
-    esp_err_t err;
-    err = relay_storage_init("storage");
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG,"NVS init failed");
-    }
-    if (fan_auto_off_timer_init() != ESP_OK) {
-        return;
-    }
-
     mqtt_init();
     mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback1);
-    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_auto_Callback1);
-    mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);
-    mqtt_Topic_Subsribe(pcControlTopics[3],&rly_MQTT_auto_Callback2);
-    mqtt_Topic_Subsribe(pcControlTopics[4],&rly_MQTT_Callback3);
+    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_Callback2);
+    mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback3);
     
     xTaskCreate(Relay_Control_Task, "Relay Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
 };

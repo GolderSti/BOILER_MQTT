@@ -10,9 +10,16 @@
 #define RELAY_ON_STATE 1
 #define RELAY_OFF_STATE 0
 #define RLY_STATE_DEFAULT_VALUE RELAY_OFF_STATE
-#define RLY_MSG_CONTROL 1
-#define RLY2_MSG_CONTROL 2
-#define RLY3_MSG_CONTROL 3
+#define RLY_MAIN_CONTROL 1
+#define RLY_MIRROR_CONTROL 2
+#define RLY_FAN_CONTROL 3
+
+enum Light_States {
+    ALL_OFF = 0,
+    MIRROR_ON,
+    MAIN_ON,
+    ALL_ON
+};
 
 typedef struct
 {

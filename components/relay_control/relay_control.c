@@ -48,10 +48,6 @@ typedef struct
 } RelayState_t;
 
 static QueueHandle_t xRelay_Msg_Queue;
-static int32_t uiOnTime=480, uiOffTime=1200;
-static SemaphoreHandle_t xAutoPowerMutex;
-static int8_t iAutoPower; 
-static SemaphoreHandle_t rc_TimeMutex;
 static TimerHandle_t s_fan_auto_off_timer = NULL;
 static enum Light_States LightState;
 
@@ -66,7 +62,7 @@ static void QUEUE_check_rslt(const char api_name[], BaseType_t rslt)
         // pdPASS = 0,                                    /*!< Function execution successful */
         case pdPASS:
 
-            ESP_LOGV(TAG,"\t[%s]\tOK", api_name);
+            // ESP_LOGV(TAG,"\t[%s]\tOK", api_name);
             break;
         default:
             ESP_LOGE(TAG,"\t[%s]\tError [%d] : Bufer is full\r\n", api_name, rslt);
@@ -154,6 +150,41 @@ static esp_err_t fan_auto_off_timer_init(void)
 
 
 /*!
+ *  @brief convert uLightState to LightState
+ *
+ *  @param[in] uiLState:    uiLightState
+ *
+ */
+void LightState_Change(uint32_t uiLState)
+{
+    switch (uiLState)
+    {
+    case 00:
+        LightState = ALL_OFF;
+        ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
+        rly_MQTT_MSG_send(TPC_LIGHT, 0);
+        break;
+    case 01:
+        LightState = MAIN_ON;
+        ESP_LOGD(TAG, "\tLightState:\tMAIN_ON");
+        break;
+    case 10:
+        LightState = MIRROR_ON;
+        ESP_LOGD(TAG, "\tLightState:\tMIRROR_ON");
+        break;
+    case 11:
+        LightState = ALL_ON;
+        ESP_LOGD(TAG, "\tLightState:\tALL_ON");
+        rly_MQTT_MSG_send(TPC_LIGHT, 1);
+        break;
+
+    default:
+        ESP_LOGE(TAG, "\tLight State out of bounds!");
+        break;
+    }
+};
+
+/*!
  *  @brief Relay control task. Wait message and change relay state
  *
  *  @param[in] pvParameters   : doesn't use
@@ -164,7 +195,6 @@ void Relay_Control_Task(void *pvParameters)
     static const char *TAG = "RLY_TSK";
     static RelayState_t xRelay1State,xRelay2State,xRelay3State;  // Добавлено для третьего реле
     Relay_Msg_t xRelay_Msg;
-    esp_err_t err;
     static uint32_t uLightState = 0; // 00 - all off, 01 - mirror, 10 - main, 11 - all on
 
     ESP_LOGI(TAG,"\tRElay_Control_task \t START");
@@ -240,41 +270,6 @@ void Relay_Control_Task(void *pvParameters)
 }
 
 /*!
- *  @brief convert uLightState to LightState
- *
- *  @param[in] uiLState:    uiLightState
- *
- */
-void LightState_Change(uint32_t uiLState)
-{
-    switch (uiLState)
-    {
-    case 00:
-        LightState = ALL_OFF;
-        ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
-        rly_MQTT_MSG_send(TPC_LIGHT, 0);
-        break;
-    case 01:
-        LightState = MAIN_ON;
-        ESP_LOGD(TAG, "\tLightState:\tMAIN_ON");
-        break;
-    case 10:
-        LightState = MIRROR_ON;
-        ESP_LOGD(TAG, "\tLightState:\tMIRROR_ON");
-        break;
-    case 11:
-        LightState = ALL_ON;
-        ESP_LOGD(TAG, "\tLightState:\tALL_ON");
-        rly_MQTT_MSG_send(TPC_LIGHT, 1);
-        break;
-
-    default:
-        ESP_LOGE(TAG, "\tLight State out of bounds!");
-        break;
-    }
-};
-
-/*!
  *  @brief add msg to Relay_msg_queue
  *
  *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second, 2 for third
@@ -304,7 +299,7 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
     
     xRelay_Msg.uMsg=uNewState;
     xStatus = xQueueSendToBack( xRelay_Msg_Queue, &xRelay_Msg, 0 );
-    // QUEUE_check_rslt("Relay queue msg send", xStatus);
+    QUEUE_check_rslt("Relay queue msg send", xStatus);
 };
 
 
@@ -428,6 +423,10 @@ void Relay_Control_Init()
     
     if (Relay_IO_Init() != ESP_OK) {
         ESP_LOGE(TAG, "Relay GPIO init failed");
+        return;
+    }
+
+    if (fan_auto_off_timer_init() != ESP_OK) {
         return;
     }
 

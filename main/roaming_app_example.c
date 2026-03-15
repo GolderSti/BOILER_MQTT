@@ -257,7 +257,7 @@ void button_callback(uint8_t gpio_num, uint8_t event) {
         }
         if (event == BTN_EVENT_RELEASED)
         {
-            Relay_Light_On();
+            Relay_Light_Off();
         }
         
         

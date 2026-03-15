@@ -32,7 +32,6 @@
 #include "hlk_ld2410c.h"
 #include "relay_control.h"
 #include "btn_common.h"
-#include "sun_time_common.h"
 
 const char *TAG = "MAIN";
 
@@ -53,7 +52,6 @@ static const ota_config_t ota_config = {
 };
 
 //переменные для управления светом
-static int iSunRise, iSunSet;
 #define MAIN_LIGHT_RELAY 0
 #define MIRROR_LIGHT_RELAY 1
 #define FAN_RELAY 2
@@ -186,41 +184,14 @@ static void check_and_validate_ota(bool bFW_Not_Valid)
 /* =========================================================
  * Управление освещением
  * ========================================================= */
-
-
- void Switch_Light_On(){
-    int now = GetLocalTime();
-    if (now<iSunSet && now > iSunRise)
-    {
-        Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_ON_STATE);
-        Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_ON_STATE);
-        ESP_LOGD(TAG,"Switch MAIN and MIRROR light ON");
-    }else
-    {
-        Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_OFF_STATE);
-        Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_ON_STATE);        
-        ESP_LOGD(TAG,"Switch only MIRROR light ON");
-    }
-    bLightState = pdTRUE;
-    
-    
-}
-
- void Switch_Light_Off(){
-    Relay_Change_State(MAIN_LIGHT_RELAY,RELAY_OFF_STATE);
-    Relay_Change_State(MIRROR_LIGHT_RELAY,RELAY_OFF_STATE);
-    bLightState = pdFALSE;
-    ESP_LOGD(TAG,"Switch light OFF");
-}
-
 void Switch_Light(){
-    if (bLightState==pdFALSE)
+    if (Relay_GetLightState()==ALL_OFF)
     {
-        Switch_Light_On();
+        Relay_Light_On();
         ESP_LOGD(TAG,"Switch light -> ON");
     }else
     {
-        Switch_Light_Off();
+        Relay_Light_Off();
         ESP_LOGD(TAG,"Switch light -> OFF");
     }    
 }
@@ -235,14 +206,14 @@ static void on_presence(const hlk_target_data_t *data) {
     ESP_LOGI(TAG, "Moving distance: %d cm", data->moving_distance_cm);
     ESP_LOGI(TAG, "Moving energy: %d", data->moving_energy);
     
-    Switch_Light_On();
+    Relay_Light_On();
 }
 
 // Callback-функция при отсутствии
 static void on_absence(void) {
     ESP_LOGI(TAG, "No presence detected");
 
-    Switch_Light_Off();
+    Relay_Light_Off();
 }
 
 // Callback-функция изменения статуса подключения
@@ -267,7 +238,7 @@ void main_switch_change(){
 }
 
 void mirror_switch_change(){
-    Relay_Change_State(FAN_RELAY, RELAY_ON_STATE);
+    Relay_Fan_On();
 }
 
 void button_callback(uint8_t gpio_num, uint8_t event) {
@@ -402,15 +373,11 @@ void app_main(void)
     ESP_LOGI(TAG,"Starting Relay Module");
     Relay_Control_Init();
     bLightState = pdFALSE;
-    Switch_Light_Off();
+    Relay_Light_Off();
 
     ESP_LOGI(TAG,"Starting Buttons");
     // Инициализация модуля кнопок
     button_init();
-    sun_time_init(NULL);
-    stc_sync_wait(pdMS_TO_TICKS(120000));
-    iSunSet=stc_GetSunsetTime();
-    iSunRise=stc_GetSunriseTime();
     // Регистрация кнопки с настройками по умолчанию
     button_config_t default_cfg = BUTTON_CONFIG_DEFAULT();
     button_register(MAIN_BTN_PIN, &default_cfg, button_callback);

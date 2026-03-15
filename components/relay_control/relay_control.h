@@ -21,6 +21,13 @@ enum Light_States {
     ALL_ON
 };
 
+static const char *LightStatesStrings[] = {                    
+                                [ALL_OFF]="ALL_OFF",
+                                [MIRROR_ON]="MIRROR_ON",
+                                [MAIN_ON]="MAIN_ON",
+                                [ALL_ON]="ALL_ON"
+};
+
 typedef struct
 {
     uint32_t uMsgType;
@@ -30,20 +37,19 @@ typedef struct
 /*!
  *  @brief Init relay_control unit and start Relay_Control Task
  *
- *  @param[in] cfg   : unit config structure
- *
  */
 
 void Relay_Control_Init();
 
-/*!
- *  @brief add msg to Relay_msg_queue
- *
- *  @param[in] uRelayNumber:    Relay Nuber 0 for 1st, 1 for second, 2 for third
- *  @param[in] uNewState   :    Desireable relay new state
- *
- */
-void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState);
-
 void Relay_Fan_Off(void);
 void Relay_Fan_On(void);
+void Relay_Light_Off(void);
+void Relay_Light_On(void);
+void Relay_MainLight_Off(void);
+void Relay_MainLight_On(void);
+void Relay_MirrorLight_Off(void);
+void Relay_MirrorLight_On(void);
+void Relay_LoopLightMode(void);
+void Relay_SetLightMode(uint32_t new_mode);
+uint32_t Relay_GetLightMode(void);
+enum Light_States Relay_GetLightState(void);

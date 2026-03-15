@@ -27,11 +27,13 @@ static const char *TAG = "RLYCNTR";
 #define TPC_MAIN_LIGHT 1
 #define TPC_MIRROR_LIGHT 2
 #define TPC_FAN 3
+#define TPC_LIGHTMODE 4
 static const char *pcTopics[] = {                    
                                 [TPC_LIGHT]="/Light",
                                 [TPC_MAIN_LIGHT]="/MainLight",
                                 [TPC_MIRROR_LIGHT]="/MirrorLight",
                                 [TPC_FAN]="/Fan",
+                                [TPC_LIGHTMODE]="/LightMode"
                                 };
 
 #define CONTROL_TOPICS_COUNT 5
@@ -40,6 +42,7 @@ static const char *pcControlTopics[] = {
                                         "/MainLight/Set",   //1
                                         "/MirrorLight/Set", //2
                                         "/Fan/Set",         //3
+                                        "/LightMode/Set"
                                         };
 
 typedef struct 
@@ -47,10 +50,18 @@ typedef struct
     uint32_t uState;
 } RelayState_t;
 
+typedef struct
+{
+    uint32_t ChangingLights;    //what to turn on on Light_ON: 01 - mirror, 10 - main, 11 - all
+    enum Light_States curLightState;//current light state
+} LightState_t;
+
 static QueueHandle_t xRelay_Msg_Queue;
 static TimerHandle_t s_fan_auto_off_timer = NULL;
 static enum Light_States LightState;
+static LightState_t state;
 
+void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState);
 /*!
  * Expand Queue rslt to string
  */
@@ -125,6 +136,7 @@ static void on_fan_auto_off_timer_callback(TimerHandle_t xTimer)
 {
     Relay_Change_State(2, RELAY_OFF_STATE);
 }
+
 //Вспомагательная функция инициализации таймера задержки работы вентилятора
 static esp_err_t fan_auto_off_timer_init(void)
 {
@@ -162,7 +174,6 @@ void LightState_Change(uint32_t uiLState)
     case 00:
         LightState = ALL_OFF;
         ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
-        rly_MQTT_MSG_send(TPC_LIGHT, 0);
         break;
     case 01:
         LightState = MAIN_ON;
@@ -175,7 +186,6 @@ void LightState_Change(uint32_t uiLState)
     case 11:
         LightState = ALL_ON;
         ESP_LOGD(TAG, "\tLightState:\tALL_ON");
-        rly_MQTT_MSG_send(TPC_LIGHT, 1);
         break;
 
     default:
@@ -313,6 +323,81 @@ void Relay_Fan_On(void)
     Relay_Change_State(2, RELAY_ON_STATE);
 }
 
+void Relay_Light_Off(void)
+{
+    if (Relay_IO_GetState(0) == RELAY_ON_STATE)
+    {
+        Relay_Change_State(0, RELAY_OFF_STATE);    
+    }
+    if (Relay_IO_GetState(1) == RELAY_ON_STATE)
+    {
+        Relay_Change_State(1, RELAY_OFF_STATE);    
+    }    
+    rly_MQTT_MSG_send(TPC_LIGHT, 0);
+}
+
+void Relay_Light_On(void)
+{
+    if ((state.ChangingLights & 2) != 0)
+    {
+        Relay_Change_State(0, RELAY_ON_STATE);    
+    }
+    if ((state.ChangingLights & 1) != 0)
+    {
+        Relay_Change_State(1, RELAY_ON_STATE);    
+    }    
+    rly_MQTT_MSG_send(TPC_LIGHT, 1);
+}
+
+void Relay_MainLight_Off(void)
+{
+    Relay_Change_State(0, RELAY_OFF_STATE);
+}
+
+void Relay_MainLight_On(void)
+{
+    Relay_Change_State(0, RELAY_ON_STATE);
+}
+
+void Relay_MirrorLight_Off(void)
+{
+    Relay_Change_State(1, RELAY_OFF_STATE);
+}
+
+void Relay_MirrorLight_On(void)
+{
+    Relay_Change_State(1, RELAY_ON_STATE);
+}
+
+void Relay_LoopLightMode(void)
+{
+    state.ChangingLights += 1;
+    if (state.ChangingLights>3)
+    {
+        state.ChangingLights = 1;
+    }
+    
+}
+
+void Relay_SetLightMode(uint32_t new_mode)
+{
+    if ((new_mode > 3))
+    {
+        return;
+    }
+    
+    state.ChangingLights = new_mode;
+}
+
+uint32_t Relay_GetLightMode(void)
+{
+    return state.ChangingLights;
+}
+
+enum Light_States Relay_GetLightState(void)
+{
+    return state.curLightState;
+}
 /*!
  *  @brief Convert String to int32 via strtol() and checks some errors
  *
@@ -430,10 +515,12 @@ void Relay_Control_Init()
         return;
     }
 
+    state.curLightState=ALL_OFF;
+    state.ChangingLights=3;
     mqtt_init();
-    mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback1);
-    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_Callback2);
-    mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback3);
+    mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_Callback1);
+    mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);
+    mqtt_Topic_Subsribe(pcControlTopics[3],&rly_MQTT_Callback3);
     
     xTaskCreate(Relay_Control_Task, "Relay Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
 };

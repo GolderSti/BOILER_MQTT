@@ -251,7 +251,16 @@ void button_callback(uint8_t gpio_num, uint8_t event) {
 
     if (gpio_num==MAIN_BTN_PIN && (event == BTN_EVENT_PRESSED || event == BTN_EVENT_RELEASED))
     {
-        main_switch_change();
+        if (event == BTN_EVENT_PRESSED)
+        {
+            Relay_Light_On();
+        }
+        if (event == BTN_EVENT_RELEASED)
+        {
+            Relay_Light_On();
+        }
+        
+        
     }
     if (gpio_num==MIRROR_BTN_PIN && (event == BTN_EVENT_PRESSED || event == BTN_EVENT_RELEASED))
     {

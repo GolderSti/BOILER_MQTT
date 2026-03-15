@@ -13,19 +13,13 @@
 #define RLY_MAIN_CONTROL 1
 #define RLY_MIRROR_CONTROL 2
 #define RLY_FAN_CONTROL 3
+#define RLY_LIGHTMODE_CONTROL 4
 
 enum Light_States {
     ALL_OFF = 0,
     MIRROR_ON,
     MAIN_ON,
     ALL_ON
-};
-
-static const char *LightStatesStrings[] = {                    
-                                [ALL_OFF]="ALL_OFF",
-                                [MIRROR_ON]="MIRROR_ON",
-                                [MAIN_ON]="MAIN_ON",
-                                [ALL_ON]="ALL_ON"
 };
 
 typedef struct

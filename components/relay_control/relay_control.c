@@ -45,6 +45,15 @@ static const char *pcControlTopics[] = {
                                         "/LightMode/Set"
                                         };
 
+static const char *LightStatesStrings[] = {                    
+                                [ALL_OFF]="ALL_OFF",
+                                [MIRROR_ON]="MIRROR_ON",
+                                [MAIN_ON]="MAIN_ON",
+                                [ALL_ON]="ALL_ON"
+};
+
+
+
 typedef struct 
 {
     uint32_t uState;
@@ -52,13 +61,12 @@ typedef struct
 
 typedef struct
 {
-    uint32_t ChangingLights;    //what to turn on on Light_ON: 01 - mirror, 10 - main, 11 - all
+    uint32_t LightMode;    //what to turn on on Light_ON: 01 - mirror, 10 - main, 11 - all
     enum Light_States curLightState;//current light state
 } LightState_t;
 
 static QueueHandle_t xRelay_Msg_Queue;
 static TimerHandle_t s_fan_auto_off_timer = NULL;
-static enum Light_States LightState;
 static LightState_t state;
 
 void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState);
@@ -97,7 +105,13 @@ static void rly_MQTT_MSG_send(uint32_t uTopicNmb, uint32_t uMsg)
         if (pMessage!= NULL)
         {
             strcpy(pTopic, pcTopics[uTopicNmb]);  
-            sprintf(pMessage,"%lu",uMsg);
+            if (uTopicNmb == TPC_LIGHTMODE)
+            {
+                sprintf(pMessage, "%s", LightStatesStrings[uMsg]);
+            }else
+            {
+                sprintf(pMessage,"%lu",uMsg);
+            }
             mqtt_Message_Publish(pTopic, pMessage);
             free(pTopic);
             free(pMessage);
@@ -172,19 +186,35 @@ void LightState_Change(uint32_t uiLState)
     switch (uiLState)
     {
     case 00:
-        LightState = ALL_OFF;
+        if (state.curLightState != ALL_OFF)
+        {
+            rly_MQTT_MSG_send(TPC_LIGHT,0);
+        }
+        state.curLightState = ALL_OFF;
         ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
         break;
     case 01:
-        LightState = MAIN_ON;
+        if (state.curLightState == ALL_OFF)
+        {
+            rly_MQTT_MSG_send(TPC_LIGHT,1);
+        }
+        state.curLightState = MAIN_ON;
         ESP_LOGD(TAG, "\tLightState:\tMAIN_ON");
         break;
     case 10:
-        LightState = MIRROR_ON;
+        if (state.curLightState == ALL_OFF)
+        {
+            rly_MQTT_MSG_send(TPC_LIGHT,1);
+        }
+        state.curLightState = MIRROR_ON;
         ESP_LOGD(TAG, "\tLightState:\tMIRROR_ON");
         break;
     case 11:
-        LightState = ALL_ON;
+        if (state.curLightState == ALL_OFF)
+        {
+            rly_MQTT_MSG_send(TPC_LIGHT,1);
+        }
+        state.curLightState = ALL_ON;
         ESP_LOGD(TAG, "\tLightState:\tALL_ON");
         break;
 
@@ -213,7 +243,6 @@ void Relay_Control_Task(void *pvParameters)
     // Инициализация состояний реле
     xRelay1State.uState=RLY_STATE_DEFAULT_VALUE;
     xRelay2State.uState=RLY_STATE_DEFAULT_VALUE;
-    LightState=ALL_OFF;
     uLightState = 0;
     xRelay3State.uState=RELAY_OFF_STATE;
 
@@ -224,7 +253,9 @@ void Relay_Control_Task(void *pvParameters)
     rly_MQTT_MSG_send(TPC_MIRROR_LIGHT, xRelay2State.uState);
     rly_set_output_num(2,xRelay3State.uState);  
     rly_MQTT_MSG_send(TPC_FAN, xRelay3State.uState);
-    
+    rly_MQTT_MSG_send(TPC_LIGHT,0);
+    rly_MQTT_MSG_send(TPC_LIGHTMODE, state.LightMode);
+
     ESP_LOGI(TAG,"\t[Start Main LOOP]\t...");
     
     while (1)
@@ -271,6 +302,10 @@ void Relay_Control_Task(void *pvParameters)
                     }
                 }
                 break;
+            case RLY_LIGHTMODE_CONTROL:
+                state.LightMode = xRelay_Msg.uMsg;
+                rly_MQTT_MSG_send(TPC_LIGHTMODE, xRelay_Msg.uMsg);  
+                break;
             default:
                 ESP_LOGW(TAG, "\tUNKNOWN MESSAGE");
                 break;
@@ -301,6 +336,9 @@ void Relay_Change_State(uint32_t uRelayNumber, uint32_t uNewState)
         break;
     case 2:
         xRelay_Msg.uMsgType=RLY_FAN_CONTROL;  // Добавлено для третьего реле
+        break;
+    case 3:
+        xRelay_Msg.uMsgType=RLY_LIGHTMODE_CONTROL;  
         break;
     default:
         ESP_LOGE(TAG, "\t[Relay_Change_State]\tInvalid relay number: %lu", uRelayNumber);
@@ -338,11 +376,11 @@ void Relay_Light_Off(void)
 
 void Relay_Light_On(void)
 {
-    if ((state.ChangingLights & 2) != 0)
+    if ((state.LightMode & 2) != 0)
     {
         Relay_Change_State(0, RELAY_ON_STATE);    
     }
-    if ((state.ChangingLights & 1) != 0)
+    if ((state.LightMode & 1) != 0)
     {
         Relay_Change_State(1, RELAY_ON_STATE);    
     }    
@@ -371,27 +409,29 @@ void Relay_MirrorLight_On(void)
 
 void Relay_LoopLightMode(void)
 {
-    state.ChangingLights += 1;
-    if (state.ChangingLights>3)
+    uint32_t uLightMode;
+    uLightMode = Relay_GetLightMode();
+    uLightMode += 1;
+    if (uLightMode>3)
     {
-        state.ChangingLights = 1;
+        uLightMode = 1;
     }
-    
+    Relay_SetLightMode(uLightMode);
 }
 
 void Relay_SetLightMode(uint32_t new_mode)
 {
     if ((new_mode > 3))
     {
+        ESP_LOGW(TAG, "\t[Relay_SetLightMode]\tLight Mode Out of Bounds: %lu", new_mode);
         return;
     }
-    
-    state.ChangingLights = new_mode;
+    Relay_Change_State(3,new_mode);
 }
 
 uint32_t Relay_GetLightMode(void)
 {
-    return state.ChangingLights;
+    return state.LightMode;
 }
 
 enum Light_States Relay_GetLightState(void)
@@ -516,7 +556,7 @@ void Relay_Control_Init()
     }
 
     state.curLightState=ALL_OFF;
-    state.ChangingLights=3;
+    state.LightMode=3;
     mqtt_init();
     mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_Callback1);
     mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);

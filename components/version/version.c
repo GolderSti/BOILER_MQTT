@@ -8,15 +8,17 @@ const char* FIRMWARE_VERSION = NULL;
 
 // Сравнение версий (возвращает: -1 если v1 < v2, 0 если равны, 1 если v1 > v2)
 int version_compare(const char* v1, const char* v2) {
-    int major1, minor1, patch1;
-    int major2, minor2, patch2;
+    int major1, minor1, patch1, build1;
+    int major2, minor2, patch2, build2;
+    char hash1[14], hash2[14];
     
-    sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
-    sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
+    sscanf(v1, "%d.%d.%d-%d-%s", &major1, &minor1, &patch1, &build1, hash1);
+    sscanf(v2, "%d.%d.%d-%d-%s", &major2, &minor2, &patch2, &build2, hash2);
     
     if (major1 != major2) return (major1 > major2) ? 1 : -1;
     if (minor1 != minor2) return (minor1 > minor2) ? 1 : -1;
     if (patch1 != patch2) return (patch1 > patch2) ? 1 : -1;
+    if (build1 != build2) return (build1 > build2) ? 1 : -1;
     
     return 0;
 }

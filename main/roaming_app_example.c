@@ -342,7 +342,7 @@ void app_main(void)
     
     // Конфигурация модуля
     hlk_config_t hlk_config = {
-        .device_name_prefix = "HLK-LD2410_9A95",
+        .device_name_prefix = "HLK-LD2410_2120", //HLK-LD2410_9A95
         .ble_scan_timeout = 30, // секунды
         .auto_reconnect = true,
         .presence_cb = on_presence,

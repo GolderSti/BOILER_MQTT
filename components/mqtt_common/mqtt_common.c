@@ -17,7 +17,7 @@
 #define QUEUE_LENGTH 5
 #define MQTT_BROKER_MAX_WAIT pdMS_TO_TICKS(30000) //If no broker skip for next data
 #define WiFi_SLEEP_DELAY pdMS_TO_TICKS(5000) //Keep WiFi on till next MQTT message
-static const char *MQTT_TAG = "/toilet";               //Topic preamble
+static const char *MQTT_TAG = "/toilet-test";               //Topic preamble
 
 static const char *TAG = "MQTTCMN";
 static const char *MQTT_LAST_WILL = "OFFLINE";          //If client disconnected for 2 minutes broker send this

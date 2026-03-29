@@ -59,6 +59,11 @@ static bool bLightState;
 #define MAIN_BTN_PIN GPIO_NUM_1
 #define MIRROR_BTN_PIN GPIO_NUM_2
 
+// MQTT-топики HLK-LD2410C
+#define HLK_MQTT_TOPIC_CONNECTED              "/HLK/connected"
+#define HLK_MQTT_TOPIC_ERRORS                 "/HLK/errors"
+#define HLK_MQTT_TOPIC_PRESENCE               "/HLK/presence"
+
 /* =========================================================
  * Общая информация о системе
  * ========================================================= */
@@ -201,11 +206,23 @@ void Switch_Light(){
 
 // Callback-функция при обнаружении присутствия
 static void on_presence(const hlk_target_data_t *data) {
+    char payload[192];
+
     ESP_LOGI(TAG, "Presence detected!");
     ESP_LOGI(TAG, "Target state: 0x%02X", data->target_state);
     ESP_LOGI(TAG, "Moving distance: %d cm", data->moving_distance_cm);
     ESP_LOGI(TAG, "Moving energy: %d", data->moving_energy);
-    
+
+    snprintf(payload,
+             sizeof(payload),
+             "{\"target_state\":%u,\"moving\":{\"distance\":%u,\"energy\":%u},\"static\":{\"distance\":%u,\"energy\":%u}}",
+             data->target_state,
+             data->moving_distance_cm,
+             data->moving_energy,
+             data->stationary_distance_cm,
+             data->stationary_energy);
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE, payload);
+
     Relay_Light_On();
 }
 
@@ -213,6 +230,7 @@ static void on_presence(const hlk_target_data_t *data) {
 static void on_absence(void) {
     ESP_LOGI(TAG, "No presence detected");
 
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE, "0");
     Relay_Light_Off();
 }
 
@@ -220,14 +238,17 @@ static void on_absence(void) {
 static void on_connection(bool connected) {
     if (connected) {
         ESP_LOGI(TAG, "Connected to radar");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_CONNECTED, "1");
     } else {
         ESP_LOGI(TAG, "Disconnected from radar");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_CONNECTED, "0");
     }
 }
 
 // Callback-функция ошибок
 static void on_error(const char *error) {
     ESP_LOGE(TAG, "Error: %s", error);
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_ERRORS, error != NULL ? error : "unknown");
 }
 
 /* =========================================================

@@ -64,6 +64,7 @@ static bool bLightState;
 #define HLK_MQTT_TOPIC_ERRORS                 "/HLK/errors"
 #define HLK_MQTT_TOPIC_PRESENCE_MOVING        "/HLK/presence/moving"
 #define HLK_MQTT_TOPIC_PRESENCE_STATIC        "/HLK/presence/static"
+#define MQTT_TOPIC_APP_INFO                   "/App_info"
 
 /* =========================================================
  * Общая информация о системе
@@ -320,6 +321,28 @@ void button_callback(uint8_t gpio_num, uint8_t event) {
         mirror_switch_change();
     }    
 }
+
+static void publish_app_info(void)
+{
+    char message[128];
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_chip_info_t chip_info;
+
+    esp_chip_info(&chip_info);
+
+    snprintf(message,
+             sizeof(message),
+             "{\"projectName\":\"%s\",\"version\":\"%s\","
+             "\"compileDate\":\"%s\",\"compileTime\":\"%s\"}",
+             app_desc ? app_desc->project_name : "unknown",
+             version_get(),
+             app_desc ? app_desc->date : "unknown",
+             app_desc ? app_desc->time : "unknown");
+
+    mqtt_Message_Publish(MQTT_TOPIC_APP_INFO, message);
+}
+
 
 void app_main(void)
 {

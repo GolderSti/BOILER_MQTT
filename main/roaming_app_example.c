@@ -415,7 +415,8 @@ void app_main(void)
     mqtt_init();
     vTaskDelay(pdMS_TO_TICKS(3000));
     publish_app_info();
-    
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
     ESP_LOGI(TAG, "Starting HLK-LD2410C BLE Radar");
     
     // Конфигурация модуля

@@ -22,6 +22,7 @@ static const char *MQTT_TAG = "/toilet";               //Topic preamble
 static const char *TAG = "MQTTCMN";
 static const char *MQTT_LAST_WILL = "OFFLINE";          //If client disconnected for 2 minutes broker send this
 static const char *MQTT_ON_CONNECTED = "ONLINE";        //Message on connection established
+static const char *MQTT_DIAG_TOPIC = "/Diag/MQTT";      //Topic for diagnostic messages
 
 QueueHandle_t xMQTT_Queue;
 static esp_mqtt_client_handle_t g_client;
@@ -50,6 +51,72 @@ static const char *pcControlTopics[] = {
                                         "/WiFi/Neighbors/Get",
                                         "/WiFi/Rouming/Set",                    
                                     };
+
+typedef enum {
+    MQTT_DIAG_REASON_NONE = 0,
+    MQTT_DIAG_REASON_BROKER_LOST,
+    MQTT_DIAG_REASON_WIFI_LOST,
+    MQTT_DIAG_REASON_DEVICE_REBOOT,
+} mqtt_diag_reason_t;
+
+static mqtt_diag_reason_t s_last_disconnect_reason = MQTT_DIAG_REASON_NONE;
+static esp_reset_reason_t s_reset_reason = ESP_RST_UNKNOWN;
+static bool s_boot_diag_pending = true;
+
+static const char *mqtt_diag_reason_to_str(mqtt_diag_reason_t reason)
+{
+    switch (reason) {
+        case MQTT_DIAG_REASON_BROKER_LOST:
+            return "MQTT_SERVER_CONNECTION_LOST";
+        case MQTT_DIAG_REASON_WIFI_LOST:
+            return "WIFI_CONNECTION_LOST";
+        case MQTT_DIAG_REASON_DEVICE_REBOOT:
+            return "DEVICE_REBOOT";
+        case MQTT_DIAG_REASON_NONE:
+        default:
+            return "NONE";
+    }
+}
+
+static const char *mqtt_reset_reason_to_str(esp_reset_reason_t reason)
+{
+    switch (reason) {
+        case ESP_RST_POWERON: return "POWER_ON";
+        case ESP_RST_EXT: return "EXTERNAL_PIN";
+        case ESP_RST_SW: return "SOFTWARE";
+        case ESP_RST_PANIC: return "PANIC";
+        case ESP_RST_INT_WDT: return "INT_WDT";
+        case ESP_RST_TASK_WDT: return "TASK_WDT";
+        case ESP_RST_WDT: return "OTHER_WDT";
+        case ESP_RST_DEEPSLEEP: return "DEEPSLEEP_WAKEUP";
+        case ESP_RST_BROWNOUT: return "BROWNOUT";
+        case ESP_RST_SDIO: return "SDIO";
+        default: return "UNKNOWN";
+    }
+}
+
+static void mqtt_publish_diagnostic(mqtt_diag_reason_t reason)
+{
+    char full_topic[strlen(MQTT_TAG) + strlen(MQTT_DIAG_TOPIC) + 1];
+    char payload[MAX_MESSAGE_LENGTH];
+
+    strcpy(full_topic, MQTT_TAG);
+    strcat(full_topic, MQTT_DIAG_TOPIC);
+
+    snprintf(payload,
+             sizeof(payload),
+             "{\"reason\":\"%s\",\"reset\":\"%s\"}",
+             mqtt_diag_reason_to_str(reason),
+             mqtt_reset_reason_to_str(s_reset_reason));
+
+    int msg_id = esp_mqtt_client_publish(g_client, full_topic, payload, 0, 1, 1);
+    ESP_LOGI(TAG, "\t[DIAG]\t%s -> %s (msg_id=%d)", full_topic, payload, msg_id);
+}
+
+static void mqtt_on_wifi_disconnect(void)
+{
+    s_last_disconnect_reason = MQTT_DIAG_REASON_WIFI_LOST;
+}
 
 /*!
  * @brief Convert String to int32 via strtol() and checks some errors
@@ -559,12 +626,23 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
             xEventGroupSetBits(mqtt_state_event_group, MQTT_CONNECTED_BITS);
             ESP_LOGI(TAG, "\tCONNECTED to Brocker");
+            if (s_boot_diag_pending) {
+                mqtt_publish_diagnostic(MQTT_DIAG_REASON_DEVICE_REBOOT);
+                s_boot_diag_pending = false;
+            }
+            if (s_last_disconnect_reason != MQTT_DIAG_REASON_NONE) {
+                mqtt_publish_diagnostic(s_last_disconnect_reason);
+                s_last_disconnect_reason = MQTT_DIAG_REASON_NONE;
+            }
             mqtt_Resubscribe_All_Topics();
 
             break;
         case MQTT_EVENT_DISCONNECTED:
             xEventGroupClearBits(mqtt_state_event_group, MQTT_CONNECTED_BITS);
             ESP_LOGI(TAG, "\tDISCONNECTED from Broker");
+            s_last_disconnect_reason = WFc_IsConnected()
+                                           ? MQTT_DIAG_REASON_BROKER_LOST
+                                           : MQTT_DIAG_REASON_WIFI_LOST;
             break;
 
         case MQTT_EVENT_SUBSCRIBED:
@@ -717,6 +795,9 @@ void mqtt_init()
     {
         xMQTT_Queue = xQueueCreate( 18, sizeof( MQTT_Queue_Data_t ) );
         mqtt_state_event_group = xEventGroupCreate();
+        s_reset_reason = esp_reset_reason();
+        s_boot_diag_pending = true;
+        s_last_disconnect_reason = MQTT_DIAG_REASON_NONE;
         WFc_Start();
         WFc_ConnectionWait(portMAX_DELAY);
         //come here only if we had wifi connected
@@ -741,6 +822,7 @@ void mqtt_init()
         mqtt_Topic_Subsribe(pcControlTopics[0],&MQTT_Get_Info_Callback);
         mqtt_Topic_Subsribe(pcControlTopics[1],&MQTT_Get_Neighbors_Callback);
         mqtt_Topic_Subsribe(pcControlTopics[2],&MQTT_Set_Rouming_Callback);
+        WFc_DisconnectCB_Register(&mqtt_on_wifi_disconnect);
 
         xTaskCreate(mqtt_maintask, "mqtt_maintask", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
     }else

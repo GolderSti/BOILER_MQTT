@@ -45,12 +45,12 @@ static const char *pcControlTopics[] = {
                                         "/LightMode/Set"
                                         };
 
-static const char *LightStatesStrings[] = {                    
-                                [ALL_OFF]="ALL_OFF",
-                                [MIRROR_ON]="MIRROR_ON",
-                                [MAIN_ON]="MAIN_ON",
-                                [ALL_ON]="ALL_ON"
-};
+// static const char *LightStatesStrings[] = {                    
+//                                 [ALL_OFF]="ALL_OFF",
+//                                 [MIRROR_ON]="MIRROR_ON",
+//                                 [MAIN_ON]="MAIN_ON",
+//                                 [ALL_ON]="ALL_ON"
+// };
 
 
 

@@ -326,7 +326,6 @@ static void publish_app_info(void)
 {
     char message[128];
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    const esp_partition_t *running = esp_ota_get_running_partition();
     esp_chip_info_t chip_info;
 
     esp_chip_info(&chip_info);

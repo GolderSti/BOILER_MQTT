@@ -710,6 +710,20 @@ bool hlk_ld2410c_get_latest_data(hlk_target_data_t *data)
     return true;
 }
 
+bool hlk_ld2410c_get_presence_state(hlk_target_data_t *data, bool *has_presence)
+{
+    if (!ctx.is_initialized || !data || !has_presence) {
+        return false;
+    }
+
+    xSemaphoreTake(ctx.data_mutex, portMAX_DELAY);
+    memcpy(data, &ctx.latest_data, sizeof(hlk_target_data_t));
+    *has_presence = ctx.has_presence;
+    xSemaphoreGive(ctx.data_mutex);
+
+    return true;
+}
+
 esp_err_t hlk_ld2410c_set_password(const uint8_t password[6])
 {
     if (!ctx.connected || ctx.rx_char_handle == 0) {

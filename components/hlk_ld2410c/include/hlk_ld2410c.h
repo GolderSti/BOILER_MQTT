@@ -44,6 +44,16 @@ bool hlk_ld2410c_is_connected(void);
 bool hlk_ld2410c_get_latest_data(hlk_target_data_t *data);
 
 /**
+ * @brief Получение последних данных и признака присутствия
+ *
+ * @param data Указатель для сохранения данных
+ * @param has_presence Указатель для сохранения флага присутствия
+ * @return true Данные получены успешно
+ * @return false Нет данных или ошибка
+ */
+bool hlk_ld2410c_get_presence_state(hlk_target_data_t *data, bool *has_presence);
+
+/**
  * @brief Установка пароля Bluetooth
  * 
  * @param password Пароль (6 байт)

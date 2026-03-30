@@ -470,6 +470,29 @@ static int32_t cmn_String_to_int32(const char *pcMessage) {
 }
 
 /*!
+ *  @brief Run when MQTT client receive MSG in /Light topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_Callback0(const char *pcMessage) {
+    uint32_t uState;
+
+    //Convert to int
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState==0){
+        ESP_LOGI(TAG,"\t[LIGHT MSG RCV] \tTURN OFF");
+        Relay_Light_Off();
+    } else if (uState==1){
+        ESP_LOGI(TAG,"\t[LIGHT MSG RCV] \tTURN ON");
+        Relay_Light_On();
+    }else{
+        ESP_LOGW(TAG, "[LIGHT RELAY MSG] \tOUT OF BOUNDS: %u",uState);
+    }
+    // free(pcTmp);
+}
+
+/*!
  *  @brief Run when MQTT client receive MSG in /Relay1 topic
  *
  *  @param[in] pcMessage         : contain data that was received
@@ -537,6 +560,25 @@ static void rly_MQTT_Callback3(const char *pcMessage) {  // Добавлена �
 }
 
 /*!
+ *  @brief Run when MQTT client receive MSG in /Fan topic
+ *
+ *  @param[in] pcMessage         : contain data that was received
+ *
+ */
+static void rly_MQTT_Callback4(const char *pcMessage) {  // Добавлена новая функция
+    uint32_t uState;
+
+    //Convert to int
+    uState=cmn_String_to_int32(pcMessage);
+    if (uState<=3){
+        ESP_LOGI(TAG,"\t[LightMode MSG RCV]\tSet mode: %lu", uState);
+        Relay_SetLightMode(uState);
+    }else{
+        ESP_LOGW(TAG, "[LightMode MSG]\tOUT OF BOUNDS: %lu",uState);
+    }
+}
+
+/*!
  *  @brief Init relay_control unit and start Relay_Control Task
  *
  *  @param[in] cfg   : unit config structure
@@ -559,9 +601,11 @@ void Relay_Control_Init()
     state.curLightState=ALL_OFF;
     state.LightMode=3;
     mqtt_init();
+    mqtt_Topic_Subsribe(pcControlTopics[0],&rly_MQTT_Callback0);
     mqtt_Topic_Subsribe(pcControlTopics[1],&rly_MQTT_Callback1);
     mqtt_Topic_Subsribe(pcControlTopics[2],&rly_MQTT_Callback2);
     mqtt_Topic_Subsribe(pcControlTopics[3],&rly_MQTT_Callback3);
+    mqtt_Topic_Subsribe(pcControlTopics[4],&rly_MQTT_Callback4);
     
     xTaskCreate(Relay_Control_Task, "Relay Control Task", configMINIMAL_STACK_SIZE * 3, NULL, 5, NULL);
 };

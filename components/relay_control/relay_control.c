@@ -193,7 +193,7 @@ void LightState_Change(uint32_t uiLState)
         state.curLightState = ALL_OFF;
         ESP_LOGD(TAG, "\tLightState:\tALL_OFF");
         break;
-    case 01:
+    case 1:
         if (state.curLightState == ALL_OFF)
         {
             rly_MQTT_MSG_send(TPC_LIGHT,1);
@@ -201,7 +201,7 @@ void LightState_Change(uint32_t uiLState)
         state.curLightState = MAIN_ON;
         ESP_LOGD(TAG, "\tLightState:\tMAIN_ON");
         break;
-    case 10:
+    case 2:
         if (state.curLightState == ALL_OFF)
         {
             rly_MQTT_MSG_send(TPC_LIGHT,1);
@@ -209,7 +209,7 @@ void LightState_Change(uint32_t uiLState)
         state.curLightState = MIRROR_ON;
         ESP_LOGD(TAG, "\tLightState:\tMIRROR_ON");
         break;
-    case 11:
+    case 3:
         if (state.curLightState == ALL_OFF)
         {
             rly_MQTT_MSG_send(TPC_LIGHT,1);
@@ -219,7 +219,7 @@ void LightState_Change(uint32_t uiLState)
         break;
 
     default:
-        ESP_LOGE(TAG, "\tLight State out of bounds!");
+        ESP_LOGE(TAG, "\tLight State out of bounds:%lu", uiLState);
         break;
     }
 };

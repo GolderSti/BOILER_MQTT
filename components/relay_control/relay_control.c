@@ -107,7 +107,8 @@ static void rly_MQTT_MSG_send(uint32_t uTopicNmb, uint32_t uMsg)
             strcpy(pTopic, pcTopics[uTopicNmb]);  
             if (uTopicNmb == TPC_LIGHTMODE)
             {
-                sprintf(pMessage, "%s", LightStatesStrings[uMsg]);
+                // sprintf(pMessage, "%s", LightStatesStrings[uMsg]);
+                sprintf(pMessage,"%lu",uMsg);
             }else
             {
                 sprintf(pMessage,"%lu",uMsg);

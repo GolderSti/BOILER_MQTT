@@ -59,6 +59,13 @@ static bool bLightState;
 #define MAIN_BTN_PIN GPIO_NUM_1
 #define MIRROR_BTN_PIN GPIO_NUM_2
 
+// MQTT-топики HLK-LD2410C
+#define HLK_MQTT_TOPIC_CONNECTED              "/HLK/connected"
+#define HLK_MQTT_TOPIC_ERRORS                 "/HLK/errors"
+#define HLK_MQTT_TOPIC_PRESENCE_MOVING        "/HLK/presence/moving"
+#define HLK_MQTT_TOPIC_PRESENCE_STATIC        "/HLK/presence/static"
+#define MQTT_TOPIC_APP_INFO                   "/App_info"
+
 /* =========================================================
  * Общая информация о системе
  * ========================================================= */
@@ -201,11 +208,53 @@ void Switch_Light(){
 
 // Callback-функция при обнаружении присутствия
 static void on_presence(const hlk_target_data_t *data) {
+    char payload[192];
+
     ESP_LOGI(TAG, "Presence detected!");
     ESP_LOGI(TAG, "Target state: 0x%02X", data->target_state);
     ESP_LOGI(TAG, "Moving distance: %d cm", data->moving_distance_cm);
     ESP_LOGI(TAG, "Moving energy: %d", data->moving_energy);
+
+    switch (data->target_state)
+    {
+    case 1: //static        
+        snprintf(payload,
+                sizeof(payload),
+                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                data->target_state,
+                data->stationary_distance_cm,
+                data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+       break;
+    case 2: //moving       
+        snprintf(payload,
+                sizeof(payload),
+                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                data->target_state,
+                data->moving_distance_cm,
+                data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+       break;
+    case 3:        
+        snprintf(payload,
+                sizeof(payload),
+                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                data->target_state,
+                data->stationary_distance_cm,
+                data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+        snprintf(payload,
+                sizeof(payload),
+                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                data->target_state,
+                data->moving_distance_cm,
+                data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+       break;
     
+    default:
+        break;
+    }
     Relay_Light_On();
 }
 
@@ -213,6 +262,8 @@ static void on_presence(const hlk_target_data_t *data) {
 static void on_absence(void) {
     ESP_LOGI(TAG, "No presence detected");
 
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, "0");
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, "0");
     Relay_Light_Off();
 }
 
@@ -220,14 +271,17 @@ static void on_absence(void) {
 static void on_connection(bool connected) {
     if (connected) {
         ESP_LOGI(TAG, "Connected to radar");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_CONNECTED, "1");
     } else {
         ESP_LOGI(TAG, "Disconnected from radar");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_CONNECTED, "0");
     }
 }
 
 // Callback-функция ошибок
 static void on_error(const char *error) {
     ESP_LOGE(TAG, "Error: %s", error);
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_ERRORS, error != NULL ? error : "unknown");
 }
 
 /* =========================================================
@@ -267,6 +321,28 @@ void button_callback(uint8_t gpio_num, uint8_t event) {
         mirror_switch_change();
     }    
 }
+
+static void publish_app_info(void)
+{
+    char message[128];
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_chip_info_t chip_info;
+
+    esp_chip_info(&chip_info);
+
+    snprintf(message,
+             sizeof(message),
+             "{\"projectName\":\"%s\",\"version\":\"%s\","
+             "\"compileDate\":\"%s\",\"compileTime\":\"%s\"}",
+             app_desc ? app_desc->project_name : "unknown",
+             version_get(),
+             app_desc ? app_desc->date : "unknown",
+             app_desc ? app_desc->time : "unknown");
+
+    mqtt_Message_Publish(MQTT_TOPIC_APP_INFO, message);
+}
+
 
 void app_main(void)
 {
@@ -337,6 +413,9 @@ void app_main(void)
     ota_start_background_check();
 
     mqtt_init();
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    publish_app_info();
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
     ESP_LOGI(TAG, "Starting HLK-LD2410C BLE Radar");
     

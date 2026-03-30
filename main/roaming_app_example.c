@@ -64,6 +64,7 @@ static bool bLightState;
 #define HLK_MQTT_TOPIC_ERRORS                 "/HLK/errors"
 #define HLK_MQTT_TOPIC_PRESENCE_MOVING        "/HLK/presence/moving"
 #define HLK_MQTT_TOPIC_PRESENCE_STATIC        "/HLK/presence/static"
+#define HLK_MQTT_TOPIC_PRESENCE_GET           "/HLK/presence/Get"
 #define MQTT_TOPIC_APP_INFO                   "/App_info"
 
 /* =========================================================
@@ -206,64 +207,86 @@ void Switch_Light(){
  * Датчик HLK-LD2410C
  * ========================================================= */
 
-// Callback-функция при обнаружении присутствия
-static void on_presence(const hlk_target_data_t *data) {
+static void publish_presence_state(const hlk_target_data_t *data, bool has_presence)
+{
     char payload[192];
 
+    if (data == NULL || !has_presence) {
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, "0");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, "0");
+        return;
+    }
+
+    switch (data->target_state)
+    {
+    case 1: // static
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->stationary_distance_cm,
+                 data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+        break;
+    case 2: // moving
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->moving_distance_cm,
+                 data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+        break;
+    case 3:
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->stationary_distance_cm,
+                 data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->moving_distance_cm,
+                 data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+        break;
+    default:
+        break;
+    }
+}
+
+static void on_presence_get(const char *message)
+{
+    hlk_target_data_t latest_data = {0};
+    bool has_presence = false;
+
+    (void)message;
+    if (!hlk_ld2410c_get_presence_state(&latest_data, &has_presence)) {
+        ESP_LOGW(TAG, "Failed to get HLK presence state");
+        return;
+    }
+
+    publish_presence_state(&latest_data, has_presence);
+}
+
+// Callback-функция при обнаружении присутствия
+static void on_presence(const hlk_target_data_t *data) {
     ESP_LOGI(TAG, "Presence detected!");
     ESP_LOGI(TAG, "Target state: 0x%02X", data->target_state);
     ESP_LOGI(TAG, "Moving distance: %d cm", data->moving_distance_cm);
     ESP_LOGI(TAG, "Moving energy: %d", data->moving_energy);
 
-    switch (data->target_state)
-    {
-    case 1: //static        
-        snprintf(payload,
-                sizeof(payload),
-                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
-                data->target_state,
-                data->stationary_distance_cm,
-                data->stationary_energy);
-        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
-       break;
-    case 2: //moving       
-        snprintf(payload,
-                sizeof(payload),
-                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
-                data->target_state,
-                data->moving_distance_cm,
-                data->moving_energy);
-        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
-       break;
-    case 3:        
-        snprintf(payload,
-                sizeof(payload),
-                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
-                data->target_state,
-                data->stationary_distance_cm,
-                data->stationary_energy);
-        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
-        snprintf(payload,
-                sizeof(payload),
-                "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
-                data->target_state,
-                data->moving_distance_cm,
-                data->moving_energy);
-        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
-       break;
-    
-    default:
-        break;
-    }
+    publish_presence_state(data, true);
     Relay_Light_On();
 }
 
 // Callback-функция при отсутствии
 static void on_absence(void) {
     ESP_LOGI(TAG, "No presence detected");
-
-    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, "0");
-    mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, "0");
+    publish_presence_state(NULL, false);
     Relay_Light_Off();
 }
 
@@ -413,6 +436,7 @@ void app_main(void)
     ota_start_background_check();
 
     mqtt_init();
+    mqtt_Topic_Subsribe(HLK_MQTT_TOPIC_PRESENCE_GET, &on_presence_get);
     vTaskDelay(pdMS_TO_TICKS(3000));
     publish_app_info();
     vTaskDelay(pdMS_TO_TICKS(3000));

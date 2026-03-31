@@ -13,6 +13,7 @@
 #include "freertos/semphr.h"
 
 static const char *TAG = "HLK_LD2410C";
+static const uint16_t PRESENCE_ZONE_DISTANCE_CM = 375;
 
 static const uint8_t hlk_ble_auth_cmd[] = {
     0xFD, 0xFC, 0xFB, 0xFA,
@@ -69,6 +70,21 @@ static void gattc_cb(esp_gattc_cb_event_t event,
                      esp_gatt_if_t gattc_if,
                      esp_ble_gattc_cb_param_t *param);
 
+static bool is_target_inside_presence_zone(const hlk_target_data_t *data)
+{
+    switch (data->target_state) {
+    case 0x01: // static
+        return data->stationary_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
+    case 0x02: // moving
+        return data->moving_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
+    case 0x03: // both
+        return data->moving_distance_cm < PRESENCE_ZONE_DISTANCE_CM ||
+               data->stationary_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
+    default:
+        return false;
+    }
+}
+
 static void parse_radar_data(const uint8_t *data, size_t length) {
     if (length < 13) return; // Минимальная длина пакета
     
@@ -111,10 +127,7 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
         .stationary_energy       = p[6],
         .detection_distance_cm   = p[7] | (p[8] << 8),
     };
-    bool new_presence =
-        (new_data.target_state == 0x01 ||
-         new_data.target_state == 0x02 ||
-         new_data.target_state == 0x03);
+    bool new_presence = is_target_inside_presence_zone(&new_data);
     
     xSemaphoreTake(ctx.data_mutex, portMAX_DELAY);
     
@@ -140,8 +153,11 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
     
     xSemaphoreGive(ctx.data_mutex);
     
-    ESP_LOGD(TAG, "Target state: 0x%02X, Presence: %d", 
-             new_data.target_state, new_presence);
+    ESP_LOGD(TAG,
+             "Target state: 0x%02X, Presence(in %ucm zone): %d",
+             new_data.target_state,
+             PRESENCE_ZONE_DISTANCE_CM,
+             new_presence);
     ESP_LOGV(TAG,
         "State=%u MD=%ucm ME=%u SD=%ucm SE=%u DD=%ucm",
         new_data.target_state,

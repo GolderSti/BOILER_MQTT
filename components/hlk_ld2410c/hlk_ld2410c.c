@@ -7,6 +7,7 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "nvs_flash.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -14,6 +15,7 @@
 
 static const char *TAG = "HLK_LD2410C";
 static const uint16_t PRESENCE_ZONE_DISTANCE_CM = 375;
+static const int64_t ABSENCE_CONFIRMATION_TIME_US = 3000000;
 
 static const uint8_t hlk_ble_auth_cmd[] = {
     0xFD, 0xFC, 0xFB, 0xFA,
@@ -44,6 +46,8 @@ typedef struct {
 
     hlk_target_data_t latest_data;
     bool has_presence;
+    bool absence_pending;
+    int64_t absence_pending_since_us;
     SemaphoreHandle_t data_mutex;
     QueueHandle_t event_queue;
     TaskHandle_t ble_task_handle;
@@ -83,6 +87,13 @@ static bool is_target_inside_presence_zone(const hlk_target_data_t *data)
     default:
         return false;
     }
+}
+
+static bool should_trigger_absence_immediately(const hlk_target_data_t *data)
+{
+    return data->target_state == 0x00 ||
+           data->moving_distance_cm == 0 ||
+           data->stationary_distance_cm == 0;
 }
 
 static void parse_radar_data(const uint8_t *data, size_t length) {
@@ -139,16 +150,36 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
                         // target_state == 0x03);
     
     // Вызываем callback-функции при изменении состояния
-    if (new_presence && !ctx.has_presence) {
-        ctx.has_presence = true;
-        if (ctx.config.presence_cb) {
-            ctx.config.presence_cb(&ctx.latest_data);
+    if (new_presence) {
+        ctx.absence_pending = false;
+        if (!ctx.has_presence) {
+            ctx.has_presence = true;
+            if (ctx.config.presence_cb) {
+                ctx.config.presence_cb(&ctx.latest_data);
+            }
         }
-    } else if (!new_presence && ctx.has_presence) {
-        ctx.has_presence = false;
-        if (ctx.config.absence_cb) {
-            ctx.config.absence_cb();
+    } else if (ctx.has_presence) {
+        if (should_trigger_absence_immediately(&new_data)) {
+            ctx.has_presence = false;
+            ctx.absence_pending = false;
+            if (ctx.config.absence_cb) {
+                ctx.config.absence_cb();
+            }
+        } else {
+            int64_t now_us = esp_timer_get_time();
+            if (!ctx.absence_pending) {
+                ctx.absence_pending = true;
+                ctx.absence_pending_since_us = now_us;
+            } else if ((now_us - ctx.absence_pending_since_us) >= ABSENCE_CONFIRMATION_TIME_US) {
+                ctx.has_presence = false;
+                ctx.absence_pending = false;
+                if (ctx.config.absence_cb) {
+                    ctx.config.absence_cb();
+                }
+            }
         }
+    } else {
+        ctx.absence_pending = false;
     }
     
     xSemaphoreGive(ctx.data_mutex);

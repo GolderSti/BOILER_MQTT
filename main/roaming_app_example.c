@@ -63,6 +63,7 @@ static char s_last_hlk_state[16] = "OUTSIDE";
 // MQTT-топики HLK-LD2410C
 #define HLK_MQTT_TOPIC_CONNECTED              "/HLK/connected"
 #define HLK_MQTT_TOPIC_ERRORS                 "/HLK/errors"
+#define HLK_MQTT_TOPIC_STATE                  "/HLK/state"
 #define HLK_MQTT_TOPIC_PRESENCE_MOVING        "/HLK/presence/moving"
 #define HLK_MQTT_TOPIC_PRESENCE_STATIC        "/HLK/presence/static"
 #define HLK_MQTT_TOPIC_PRESENCE_GET           "/HLK/presence/Get"
@@ -248,7 +249,7 @@ static void on_state_change(const char *state_name)
 
     strncpy(s_last_hlk_state, state_name, sizeof(s_last_hlk_state) - 1);
     s_last_hlk_state[sizeof(s_last_hlk_state) - 1] = '\0';
-    publish_hlk_state(s_last_hlk_state);
+    mqtt_Message_Publish(HLK_MQTT_TOPIC_STATE, state_name);
 }
 
 // Callback-функция изменения статуса подключения
@@ -412,7 +413,7 @@ void app_main(void)
         .absence_cb = on_absence,
         .connection_cb = on_connection,
         .error_cb = on_error,
-        .state_change_cb = on_state_change
+        .state_change_cb = NULL //on_state_change
     };
     
     // Инициализация модуля

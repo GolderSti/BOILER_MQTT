@@ -36,6 +36,26 @@ typedef enum {
     STATE_INSIDE
 } hlk_state_t;
 
+static const char *state_to_string(hlk_state_t state)
+{
+    switch (state) {
+    case STATE_OUTSIDE:
+        return "OUTSIDE";
+    case STATE_LEAVING_2:
+        return "LEAVING_2";
+    case STATE_INTERMIDIATE:
+        return "INTERMIDIATE";
+    case STATE_LEAVING:
+        return "LEAVING";
+    case STATE_GO_INTERMIDIATE:
+        return "GO_INTERMIDIATE";
+    case STATE_INSIDE:
+        return "INSIDE";
+    default:
+        return "UNKNOWN";
+    }
+}
+
 /* =========================================================
  * CONTEXT
  * ========================================================= */
@@ -116,6 +136,7 @@ static bool should_trigger_absence_immediately(const hlk_target_data_t *data)
 * ========================================================= */
 static void transition_to_state(hlk_state_t new_state) {
     hlk_state_t old_state = ctx.current_state;
+    const char *state_name = state_to_string(new_state);
     
     // Вызываем callback при переходе из OUTSIDE
     if (old_state == STATE_OUTSIDE && new_state != STATE_OUTSIDE) {
@@ -133,8 +154,12 @@ static void transition_to_state(hlk_state_t new_state) {
     
     ctx.current_state = new_state;
     ctx.state_entry_time_us = esp_timer_get_time();
+
+    if (ctx.config.state_change_cb != NULL) {
+        ctx.config.state_change_cb(state_name);
+    }
     
-    ESP_LOGD(TAG, "State transition: %d -> %d", old_state, new_state);
+    ESP_LOGD(TAG, "State transition: %d -> %d (%s)", old_state, new_state, state_name);
 }
 
 static bool is_in_transition_zone(uint16_t dst) {

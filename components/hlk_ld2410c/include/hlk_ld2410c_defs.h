@@ -25,6 +25,7 @@ typedef void (*hlk_presence_callback_t)(const hlk_target_data_t *data);
 typedef void (*hlk_absence_callback_t)(void);
 typedef void (*hlk_connection_callback_t)(bool connected);
 typedef void (*hlk_error_callback_t)(const char *error);
+typedef void (*hlk_state_change_callback_t)(const char *state_name);
 
 // Конфигурация модуля
 typedef struct {
@@ -35,4 +36,5 @@ typedef struct {
     hlk_absence_callback_t absence_cb;
     hlk_connection_callback_t connection_cb;
     hlk_error_callback_t error_cb;
+    hlk_state_change_callback_t state_change_cb;
 } hlk_config_t;

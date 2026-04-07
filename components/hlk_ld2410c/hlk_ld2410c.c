@@ -230,7 +230,8 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
             break;
             
         case STATE_LEAVING_2:
-            if (!target_exists) {
+            // if (!target_exists) {
+            if(pdFALSE) {    
                 transition_to_state(STATE_OUTSIDE);
             } else if (dst < INSIDE_ZONE_DISTANCE_CM) {
                 transition_to_state(STATE_INSIDE);

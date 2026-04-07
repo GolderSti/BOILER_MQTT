@@ -15,7 +15,7 @@
 
 static const char *TAG = "HLK_LD2410C";
 static const uint16_t PRESENCE_ZONE_DISTANCE_CM = 375;
-static const int64_t ABSENCE_CONFIRMATION_TIME_US = 3000000;
+static const uint16_t INSIDE_ZONE_DISTANCE_CM = 300;
 
 static const uint8_t hlk_ble_auth_cmd[] = {
     0xFD, 0xFC, 0xFB, 0xFA,
@@ -24,6 +24,17 @@ static const uint8_t hlk_ble_auth_cmd[] = {
     0x48, 0x69, 0x4C, 0x69, 0x6E, 0x6B,
     0x04, 0x03, 0x02, 0x01
 };
+/* =========================================================
+* STATE MACHINE DEFINITIONS
+* ========================================================= */
+typedef enum {
+    STATE_OUTSIDE = 0,
+    STATE_LEAVING_2,
+    STATE_INTERMIDIATE,
+    STATE_LEAVING,
+    STATE_GO_INTERMIDIATE,
+    STATE_INSIDE
+} hlk_state_t;
 
 /* =========================================================
  * CONTEXT
@@ -43,6 +54,10 @@ typedef struct {
     bool is_initialized;
     bool connected;
     hlk_config_t config;
+
+    // State machine fields
+    hlk_state_t current_state;
+    int64_t state_entry_time_us;
 
     hlk_target_data_t latest_data;
     bool has_presence;
@@ -96,40 +111,65 @@ static bool should_trigger_absence_immediately(const hlk_target_data_t *data)
            data->stationary_distance_cm == 0;
 }
 
+/* =========================================================
+* STATE MACHINE HELPERS
+* ========================================================= */
+static void transition_to_state(hlk_state_t new_state) {
+    hlk_state_t old_state = ctx.current_state;
+    
+    // Вызываем callback при переходе из OUTSIDE
+    if (old_state == STATE_OUTSIDE && new_state != STATE_OUTSIDE) {
+        if (ctx.config.presence_cb) {
+            ctx.config.presence_cb(&ctx.latest_data);
+        }
+    }
+    
+    // Вызываем callback при переходе в OUTSIDE
+    if (new_state == STATE_OUTSIDE && old_state != STATE_OUTSIDE) {
+        if (ctx.config.absence_cb) {
+            ctx.config.absence_cb();
+        }
+    }
+    
+    ctx.current_state = new_state;
+    ctx.state_entry_time_us = esp_timer_get_time();
+    
+    ESP_LOGD(TAG, "State transition: %d -> %d", old_state, new_state);
+}
+
+static bool is_in_transition_zone(uint16_t dst) {
+    return (dst > 300 && dst < 375);
+}
+
 static void parse_radar_data(const uint8_t *data, size_t length) {
-    if (length < 13) return; // Минимальная длина пакета
+    if (length < 13) return;
     
     // Проверяем заголовок пакета (F4 F3 F2 F1)
-    if (data[0] != 0xF4 || data[1] != 0xF3 || 
+    if (data[0] != 0xF4 || data[1] != 0xF3 ||
         data[2] != 0xF2 || data[3] != 0xF1) {
         return;
     }
     
     // Длина данных (little-endian)
     uint16_t data_len = data[4] | (data[5] << 8);
-    uint16_t cmd      = data[6] ;
-
+    uint16_t cmd      = data[6];
+    
     // Проверяем command word
     if (cmd != 0x0002) {
-        // не normal radar data
         ESP_LOGD(TAG,"Engineer mode");
         return;
-    }else
-    {
+    } else {
         ESP_LOGD(TAG,"Normal mode");
     }
     
-
     // Проверка длины
     if (data_len + 6 > length) {
         ESP_LOGW(TAG,"Wrong length");
         return;
     }
+    
     // Парсим данные цели
-    // uint8_t target_state = data[10]; // Позиция после заголовков
-    // Payload starts at offset 8
     const uint8_t *p = &data[8];
-
     hlk_target_data_t new_data = {
         .target_state            = p[0],
         .moving_distance_cm      = p[1] | (p[2] << 8),
@@ -138,57 +178,87 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
         .stationary_energy       = p[6],
         .detection_distance_cm   = p[7] | (p[8] << 8),
     };
-    bool new_presence = is_target_inside_presence_zone(&new_data);
+    
+    // dst = min(moving_distance_cm, stationary_distance_cm)
+    uint16_t dst = new_data.moving_distance_cm;
+    if (new_data.stationary_distance_cm < dst) {
+        dst = new_data.stationary_distance_cm;
+    }
+    
+    // target = 0 если target_state == 0
+    bool target_exists = (new_data.target_state != 0);
     
     xSemaphoreTake(ctx.data_mutex, portMAX_DELAY);
-    
-    // Сохраняем данные
     ctx.latest_data = new_data;
     
-    // Определяем наличие/отсутствие
-    // bool new_presence = (target_state == 0x01 || target_state == 0x02 || 
-                        // target_state == 0x03);
+    // STATE MACHINE LOGIC
+    int64_t now_us = esp_timer_get_time();
+    int64_t state_duration_us = now_us - ctx.state_entry_time_us;
     
-    // Вызываем callback-функции при изменении состояния
-    if (new_presence) {
-        ctx.absence_pending = false;
-        if (!ctx.has_presence) {
-            ctx.has_presence = true;
-            if (ctx.config.presence_cb) {
-                ctx.config.presence_cb(&ctx.latest_data);
+    switch (ctx.current_state) {
+        case STATE_OUTSIDE:
+            if (is_in_transition_zone(dst)) {
+                transition_to_state(STATE_INTERMIDIATE);
+            } else if (dst < INSIDE_ZONE_DISTANCE_CM) {
+                transition_to_state(STATE_INSIDE);
             }
-        }
-    } else if (ctx.has_presence) {
-        if (should_trigger_absence_immediately(&new_data)) {
-            ctx.has_presence = false;
-            ctx.absence_pending = false;
-            if (ctx.config.absence_cb) {
-                ctx.config.absence_cb();
+            break;
+            
+        case STATE_LEAVING_2:
+            if (!target_exists) {
+                transition_to_state(STATE_OUTSIDE);
+            } else if (dst < INSIDE_ZONE_DISTANCE_CM) {
+                transition_to_state(STATE_INSIDE);
+            } else if (is_in_transition_zone(dst)) {
+                transition_to_state(STATE_INTERMIDIATE);
+            } else if (state_duration_us >= 3000000) { // 3 seconds
+                transition_to_state(STATE_OUTSIDE);
             }
-        } else {
-            int64_t now_us = esp_timer_get_time();
-            if (!ctx.absence_pending) {
-                ctx.absence_pending = true;
-                ctx.absence_pending_since_us = now_us;
-            } else if ((now_us - ctx.absence_pending_since_us) >= ABSENCE_CONFIRMATION_TIME_US) {
-                ctx.has_presence = false;
-                ctx.absence_pending = false;
-                if (ctx.config.absence_cb) {
-                    ctx.config.absence_cb();
-                }
+            break;
+            
+        case STATE_INTERMIDIATE:
+            if (dst < INSIDE_ZONE_DISTANCE_CM) {
+                transition_to_state(STATE_INSIDE);
+            } else if (dst > PRESENCE_ZONE_DISTANCE_CM || !target_exists) {
+                transition_to_state(STATE_LEAVING_2);
             }
-        }
-    } else {
-        ctx.absence_pending = false;
+            break;
+            
+        case STATE_GO_INTERMIDIATE:
+            if (dst < INSIDE_ZONE_DISTANCE_CM) {
+                transition_to_state(STATE_INSIDE);
+            } else if (state_duration_us >= 3000000) { // 3 seconds
+                transition_to_state(STATE_INTERMIDIATE);
+            }
+            break;
+            
+        case STATE_INSIDE:
+            if (dst > PRESENCE_ZONE_DISTANCE_CM || !target_exists) {
+                transition_to_state(STATE_LEAVING);
+            } else if (is_in_transition_zone(dst)) {
+                transition_to_state(STATE_GO_INTERMIDIATE);
+            }
+            break;
+            
+        case STATE_LEAVING:
+            if (dst < INSIDE_ZONE_DISTANCE_CM) {
+                transition_to_state(STATE_INSIDE);
+            } else if (is_in_transition_zone(dst)) {
+                transition_to_state(STATE_GO_INTERMIDIATE);
+            } else if (state_duration_us >= 300000000) { // 5 minutes = 300 seconds
+                transition_to_state(STATE_OUTSIDE);
+            }
+            break;
     }
     
     xSemaphoreGive(ctx.data_mutex);
     
     ESP_LOGD(TAG,
-             "Target state: 0x%02X, Presence(in %ucm zone): %d",
-             new_data.target_state,
-             PRESENCE_ZONE_DISTANCE_CM,
-             new_presence);
+        "Target state: 0x%02X, dst=%ucm, State=%d",
+        new_data.target_state,
+        dst,
+        ctx.current_state);
+        
     ESP_LOGV(TAG,
         "State=%u MD=%ucm ME=%u SD=%ucm SE=%u DD=%ucm",
         new_data.target_state,
@@ -198,7 +268,6 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
         new_data.stationary_energy,
         new_data.detection_distance_cm
     );
-         
 }
 
 /* =========================================================
@@ -691,7 +760,8 @@ esp_err_t hlk_ld2410c_init(const hlk_config_t *config)
 
     ctx = (hlk_context_t){0};
     ctx.config = *config;
-
+    ctx.current_state = STATE_OUTSIDE;
+    ctx.state_entry_time_us = esp_timer_get_time();
     ESP_ERROR_CHECK(
         esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 

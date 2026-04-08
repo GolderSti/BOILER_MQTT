@@ -219,10 +219,69 @@ static void publish_hlk_state(const char *state_name)
     mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, state_name);
 }
 
+static void publish_presence_state(const hlk_target_data_t *data, bool has_presence)
+{
+    char payload[192];
+
+    if (data == NULL || !has_presence) {
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, "0");
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, "0");
+        return;
+    }
+
+    switch (data->target_state)
+    {
+    case 1: // static
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->stationary_distance_cm,
+                 data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+        break;
+    case 2: // moving
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->moving_distance_cm,
+                 data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+        break;
+    case 3:
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->stationary_distance_cm,
+                 data->stationary_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_STATIC, payload);
+        snprintf(payload,
+                 sizeof(payload),
+                 "{\"target_state\":%u,\"distance\":%u,\"energy\":%u}",
+                 data->target_state,
+                 data->moving_distance_cm,
+                 data->moving_energy);
+        mqtt_Message_Publish(HLK_MQTT_TOPIC_PRESENCE_MOVING, payload);
+        break;
+    default:
+        break;
+    }
+}
+
 static void on_presence_get(const char *message)
 {
+    hlk_target_data_t latest_data = {0};
+    bool has_presence = false;
+
     (void)message;
-    publish_hlk_state(s_last_hlk_state);
+    if (!hlk_ld2410c_get_presence_state(&latest_data, &has_presence)) {
+        ESP_LOGW(TAG, "Failed to get HLK presence state");
+        return;
+    }
+
+    publish_presence_state(&latest_data, has_presence);
 }
 
 // Callback-функция при обнаружении присутствия

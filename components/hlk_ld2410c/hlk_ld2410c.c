@@ -15,8 +15,8 @@
 
 static const char *TAG = "HLK_LD2410C";
 static const uint16_t PRESENCE_ZONE_DISTANCE_CM = 375;
-static const uint16_t INSIDE_ZONE_DISTANCE_CM = 300;
-static const uint16_t ZONE_HISTER_CM = 15;
+static const uint16_t INSIDE_ZONE_DISTANCE_CM = 250;
+// static const uint16_t ZONE_HISTER_CM = 15;
 
 static const uint8_t hlk_ble_auth_cmd[] = {
     0xFD, 0xFC, 0xFB, 0xFA,
@@ -109,28 +109,6 @@ static void gap_cb(esp_gap_ble_cb_event_t event,
 static void gattc_cb(esp_gattc_cb_event_t event,
                      esp_gatt_if_t gattc_if,
                      esp_ble_gattc_cb_param_t *param);
-
-static bool is_target_inside_presence_zone(const hlk_target_data_t *data)
-{
-    switch (data->target_state) {
-    case 0x01: // static
-        return data->stationary_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
-    case 0x02: // moving
-        return data->moving_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
-    case 0x03: // both
-        return data->moving_distance_cm < PRESENCE_ZONE_DISTANCE_CM ||
-               data->stationary_distance_cm < PRESENCE_ZONE_DISTANCE_CM;
-    default:
-        return false;
-    }
-}
-
-static bool should_trigger_absence_immediately(const hlk_target_data_t *data)
-{
-    return data->target_state == 0x00 ||
-           data->moving_distance_cm == 0 ||
-           data->stationary_distance_cm == 0;
-}
 
 /* =========================================================
 * STATE MACHINE HELPERS

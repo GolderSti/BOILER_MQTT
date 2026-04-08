@@ -16,6 +16,7 @@
 static const char *TAG = "HLK_LD2410C";
 static const uint16_t PRESENCE_ZONE_DISTANCE_CM = 375;
 static const uint16_t INSIDE_ZONE_DISTANCE_CM = 300;
+static const uint16_t ZONE_HISTER_CM = 15;
 
 static const uint8_t hlk_ble_auth_cmd[] = {
     0xFD, 0xFC, 0xFB, 0xFA,
@@ -163,7 +164,7 @@ static void transition_to_state(hlk_state_t new_state) {
 }
 
 static bool is_in_transition_zone(uint16_t dst) {
-    return (dst > 300 && dst < 375);
+    return (dst >= (INSIDE_ZONE_DISTANCE_CM) && dst < (PRESENCE_ZONE_DISTANCE_CM));
 }
 
 static void parse_radar_data(const uint8_t *data, size_t length) {
@@ -253,7 +254,7 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
         case STATE_GO_INTERMIDIATE:
             if (dst < INSIDE_ZONE_DISTANCE_CM) {
                 transition_to_state(STATE_INSIDE);
-            } else if (state_duration_us >= 3000000) { // 3 seconds
+            } else if (state_duration_us >= 1000000) { // 3 seconds
                 transition_to_state(STATE_INTERMIDIATE);
             }
             break;
@@ -271,7 +272,7 @@ static void parse_radar_data(const uint8_t *data, size_t length) {
                 transition_to_state(STATE_INSIDE);
             } else if (is_in_transition_zone(dst)) {
                 transition_to_state(STATE_GO_INTERMIDIATE);
-            } else if (state_duration_us >= 300000000) { // 5 minutes = 300 seconds
+            } else if (state_duration_us >= 150000000) { // 5 minutes = 300 seconds
                 transition_to_state(STATE_OUTSIDE);
             }
             break;

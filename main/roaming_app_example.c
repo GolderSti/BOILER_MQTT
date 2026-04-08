@@ -413,7 +413,7 @@ void app_main(void)
         .absence_cb = on_absence,
         .connection_cb = on_connection,
         .error_cb = on_error,
-        .state_change_cb = NULL //on_state_change
+        .state_change_cb = on_state_change //NULL
     };
     
     // Инициализация модуля

@@ -121,6 +121,7 @@ static void transition_to_state(hlk_state_t new_state) {
     if (old_state == STATE_OUTSIDE && new_state != STATE_OUTSIDE) {
         if (ctx.config.presence_cb) {
             ctx.config.presence_cb(&ctx.latest_data);
+        ctx.has_presence = true;
         }
     }
     
@@ -129,6 +130,7 @@ static void transition_to_state(hlk_state_t new_state) {
         if (ctx.config.absence_cb) {
             ctx.config.absence_cb();
         }
+        ctx.has_presence = false;
     }
     
     ctx.current_state = new_state;
